@@ -64,6 +64,16 @@ ship() {  # ship <rip dir> — place under Artist/Album (Year) on $dest
   [[ -n $artist && -n $album ]] || { echo "missing artist/album tags in $first" >&2; return 1; }
   target="$artist/$album${year:+ ($year)}"
 
+  # cyanrip writes MusicBrainz IDs under its own names (release_id, mbid,
+  # totaldiscs). Add the Picard-standard ones Jellyfin and beets read.
+  local f rel rec td
+  for f in "$dir"/*.flac; do
+    rel=$(tag "$f" release_id) rec=$(tag "$f" mbid) td=$(tag "$f" totaldiscs)
+    metaflac ${rel:+--set-tag=MUSICBRAINZ_ALBUMID=$rel} \
+             ${rec:+--set-tag=MUSICBRAINZ_TRACKID=$rec} \
+             ${td:+--set-tag=DISCTOTAL=$td} "$f"
+  done
+
   # Jellyfin looks for cover.jpg/folder.jpg; cyanrip names it Front.jpg.
   local front
   front=$(find "$dir" -maxdepth 1 -iname 'front.*' | head -n1)
@@ -94,7 +104,11 @@ mkdir -p "$work"
 cd "$work"
 
 rip() {
-  cyanrip -d "$dev" -s "$offset" -o flac -D rip -L rip -M rip "$@" 2>&1 | tee -a cyanrip.out
+  # -m 1200: Cover Art Archive's full-size originals run to tens of MB of
+  # PNG, and cyanrip embeds the cover in every track. The 1200px JPEG
+  # thumbnail is plenty. -L/-M left at cyanrip's defaults: they carry the
+  # "CD<n>" suffix that keeps a multi-disc set's logs from colliding.
+  cyanrip -d "$dev" -s "$offset" -o flac -m 1200 -D rip "$@" 2>&1 | tee -a cyanrip.out
   return "${PIPESTATUS[0]}"
 }
 
@@ -123,6 +137,7 @@ accurip=${accurip:+ — AccurateRip ${accurip#Tracks ripped accurately: }}
 
 if target=$(ship "$work/rip"); then
   eject "$dev" || true
+  cd /
   rm -rf "$work"
   notify "ripped $target$note$accurip"
 else
