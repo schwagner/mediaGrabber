@@ -65,7 +65,11 @@ services.mediagrabber = {
 ```
 
 Logs: `journalctl -u mediagrab@sr0`. A failed rip leaves the disc in the
-drive; retry with `sudo systemctl start mediagrab@sr0`. If `fleet-notify`
-is on PATH, every outcome is reported through it.
+drive; retry with `sudo systemctl start mediagrab@sr0`.
+
+Every run ends in one notification saying what the disc was and whether it
+worked: a critical desktop popup for `user` that stays up until dismissed
+(skipped if they are not logged in), and a `fleet-notify` message if that
+is on PATH. A crash mid-rip still pops one.
 
 Tests for the DVD decisions (no drive needed): `bash tests/dvdrip-test.sh`.

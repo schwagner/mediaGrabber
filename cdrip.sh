@@ -15,7 +15,7 @@
 #      because cyanrip sanitises '/' and so cannot make Artist/Album paths.
 #   3. rsync to $CDRIP_DEST (host:path) as Artist/Album (Year)/. Jellyfin's
 #      real-time monitor picks it up; nothing has to poke its API.
-#   4. Eject, and fleet-notify the outcome.
+#   4. Eject, and report the outcome (fleet-notify and a desktop popup).
 #
 # MusicBrainz outcomes, and why each is handled the way it is:
 #   - one release    -> rip and ship.
@@ -36,9 +36,19 @@ state=${CDRIP_STATE:-/var/lib/cdrip}
 dest=${CDRIP_DEST:?CDRIP_DEST (host:/path) is not set}
 offset=${CDRIP_OFFSET:-0}
 
-notify() {
+notify() {  # notify <ok|fail|note> <message> — once per run, as it ends
+  local level=$1; shift
   echo "$*"
   command -v fleet-notify >/dev/null && fleet-notify "cdrip: $*" || true
+  command -v mediagrab-popup >/dev/null && mediagrab-popup "$level" "$*" || true
+  notified=1
+}
+
+# Whatever set -e kills before a notify still gets a popup.
+crashed() {
+  local rc=$?
+  (( rc == 0 )) || [[ -n ${notified-} ]] ||
+    notify fail "cdrip stopped unexpectedly (exit $rc) on ${dev:-the drive} — see journalctl -u 'mediagrab@*'"
 }
 
 tag() {  # tag <flac> <name>... — first non-empty of the named tags
@@ -94,6 +104,7 @@ if [[ ${CDRIP_MODE:-} == ship ]]; then
   echo "shipped $target"
   exit
 fi
+trap crashed EXIT
 
 dev=${1:?usage: cdrip <device>}
 [[ $dev == /dev/* ]] || dev=/dev/$dev
@@ -116,16 +127,16 @@ note=""
 if ! rip; then
   if grep -q 'Multiple releases found' cyanrip.out; then
     note=" (several MusicBrainz releases; took the first)"
-    rip -R 1 || { notify "rip FAILED on $dev — see $work/cyanrip.out"; exit 1; }
+    rip -R 1 || { notify fail "rip FAILED on $dev — see $work/cyanrip.out"; exit 1; }
   elif grep -q 'Unable to find release info' cyanrip.out; then
-    rip -N || { notify "rip FAILED on $dev — see $work/cyanrip.out"; exit 1; }
+    rip -N || { notify fail "rip FAILED on $dev — see $work/cyanrip.out"; exit 1; }
     mkdir -p "$state/unmatched"
     mv "$work" "$state/unmatched/$stamp"
     eject "$dev" || true
-    notify "disc not in MusicBrainz; ripped untagged to $state/unmatched/$stamp. Tag it, then: cdrip-ship $state/unmatched/$stamp/rip"
+    notify note "disc not in MusicBrainz; ripped untagged to $state/unmatched/$stamp. Tag it, then: cdrip-ship $state/unmatched/$stamp/rip"
     exit 0
   else
-    notify "rip FAILED on $dev — see $work/cyanrip.out"
+    notify fail "rip FAILED on $dev — see $work/cyanrip.out"
     exit 1
   fi
 fi
@@ -139,9 +150,9 @@ if target=$(ship "$work/rip"); then
   eject "$dev" || true
   cd /
   rm -rf "$work"
-  notify "ripped $target$note$accurip"
+  notify ok "ripped $target$note$accurip"
 else
   eject "$dev" || true
-  notify "ripped but could not ship $work/rip to $dest — run: cdrip-ship $work/rip"
+  notify fail "ripped but could not ship $work/rip to $dest — run: cdrip-ship $work/rip"
   exit 1
 fi

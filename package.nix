@@ -1,4 +1,5 @@
-# mediagrab (the dispatcher udev runs), cdrip, cdrip-ship and dvdrip, each a
+# mediagrab (the dispatcher udev runs), cdrip, cdrip-ship, dvdrip and
+# mediagrab-popup (the sticky desktop notification), each a
 # wrapper with the runtime tools pinned on PATH so the unit does not depend
 # on the system profile. fleet-notify is the exception: it is host config,
 # found at run time and skipped if absent.
@@ -10,22 +11,22 @@
 # libdvdread links libdvdcss in nixpkgs, which is what decrypts CSS.
 { lib, stdenvNoCC, makeWrapper, bash, cyanrip, flac, rsync, openssh,
   coreutils, findutils, gnugrep, gnused, gawk, util-linux, systemd, lsdvd,
-  ffmpeg-headless }:
+  ffmpeg-headless, libnotify }:
 
 let
   ffmpeg = ffmpeg-headless.override { withDvdnav = true; withDvdread = true; };
   path = lib.makeBinPath [
     bash cyanrip flac rsync openssh coreutils findutils gnugrep gnused gawk
-    util-linux systemd lsdvd ffmpeg
+    util-linux systemd lsdvd ffmpeg libnotify
   ];
 in
 stdenvNoCC.mkDerivation {
   pname = "mediagrabber";
-  version = "0.2.0";
+  version = "0.3.0";
   src = ./.;
   nativeBuildInputs = [ makeWrapper ];
   installPhase = ''
-    for s in mediagrab cdrip dvdrip; do
+    for s in mediagrab cdrip dvdrip popup; do
       install -Dm755 $s.sh $out/libexec/$s
     done
     patchShebangs $out/libexec
@@ -34,6 +35,7 @@ stdenvNoCC.mkDerivation {
     for s in mediagrab cdrip dvdrip; do
       makeWrapper $out/libexec/$s $out/bin/$s --prefix PATH : $out/bin:${path}
     done
+    makeWrapper $out/libexec/popup $out/bin/mediagrab-popup --prefix PATH : ${path}
     makeWrapper $out/libexec/cdrip $out/bin/cdrip-ship --prefix PATH : $out/bin:${path} --set CDRIP_MODE ship
   '';
   passthru = { inherit ffmpeg; };

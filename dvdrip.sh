@@ -47,10 +47,21 @@ state=${DVDRIP_STATE:-/var/lib/mediagrabber/dvd}
 movies=${DVDRIP_MOVIES:?DVDRIP_MOVIES (host:/path) is not set}
 shows=${DVDRIP_SHOWS:?DVDRIP_SHOWS (host:/path) is not set}
 
-notify() {
+notify() {  # notify <ok|fail|note> <message> — once per run, as it ends
+  local level=$1; shift
   echo "$*"
   command -v fleet-notify >/dev/null && fleet-notify "dvdrip: $*" || true
+  command -v mediagrab-popup >/dev/null && mediagrab-popup "$level" "$*" || true
+  notified=1
 }
+
+# Whatever set -e kills before a notify still gets a popup.
+crashed() {
+  local rc=$?
+  (( rc == 0 )) || [[ -n ${notified-} ]] ||
+    notify fail "dvdrip stopped unexpectedly (exit $rc) on ${dev:-the drive} — see journalctl -u 'mediagrab@*'"
+}
+trap crashed EXIT
 
 clean() {  # safe as one path component
   printf '%s' "$1" | tr '/\\:*?"<>|' '_________' | sed 's/^[. ]*//; s/[. ]*$//'
@@ -58,7 +69,7 @@ clean() {  # safe as one path component
 
 hms() { printf '%d:%02d:%02d' $(($1/3600)) $(($1%3600/60)) $(($1%60)); }
 
-info=$(lsdvd "$dev" 2>/dev/null) || { notify "lsdvd cannot read $dev"; exit 1; }
+info=$(lsdvd "$dev" 2>/dev/null) || { notify fail "lsdvd cannot read $dev"; exit 1; }
 label=$(sed -n 's/^Disc Title: *//p' <<<"$info" | head -n1)
 
 # "Title: 01, Length: 01:52:33.200 Chapters: 28, ..." -> "1 6753"
@@ -67,13 +78,13 @@ while read -r t s; do len[$t]=$s; done < <(
   awk '/^Title: [0-9]+, Length:/ {
          t = $2; sub(",", "", t); split($4, a, ":")
          printf "%d %d\n", t, a[1]*3600 + a[2]*60 + a[3] }' <<<"$info")
-(( ${#len[@]} )) || { notify "no titles found on $dev (\"$label\")"; exit 1; }
+(( ${#len[@]} )) || { notify fail "no titles found on $dev (\"$label\")"; exit 1; }
 
 titles_by_len() { for t in "${!len[@]}"; do echo "${len[$t]} $t"; done | sort -rn; }
 summary() { titles_by_len | head -n8 | while read -r s t; do printf 'title %d %s; ' "$t" "$(hms "$s")"; done; }
 
 decide() {  # print the reason and the commands, leave the disc in, exit
-  notify "\"$label\" needs a decision: $1. Titles: $(summary)Run one of:
+  notify note "\"$label\" needs a decision: $1. Titles: $(summary)Run one of:
   dvdrip $dev movie \"Name (Year)\" [title]
   dvdrip $dev show \"Series\" <season> [first episode]"
   exit 0
@@ -144,7 +155,7 @@ case $mode in
   show)
     name=${3:?show needs a series name} season=${4:?show needs a season}
     classify
-    [[ $kind == show ]] || { notify "no run of episode-length titles on $dev"; exit 1; }
+    [[ $kind == show ]] || { notify fail "no run of episode-length titles on $dev"; exit 1; }
     ;;
   *) echo "unknown mode $mode" >&2; exit 2 ;;
 esac
@@ -166,13 +177,13 @@ remux() {  # remux <title> <out.mkv>
   mv "$2.part" "$2"
 }
 
-fail() { notify "rip FAILED for \"$label\" — see $work/ffmpeg.out (CSS keys? scratched?)"; exit 1; }
+fail() { notify fail "rip FAILED for \"$label\" — see $work/ffmpeg.out (CSS keys? scratched?)"; exit 1; }
 
 if [[ $kind == movie ]]; then
   out="$name.mkv"
   remux "$longest_t" "$out" || fail
   rsync -t --mkpath --chmod=F0644 --ignore-existing --partial "$out" "$movies/$name/" || {
-    notify "ripped but could not ship $work/$out to $movies/$name/"; exit 1; }
+    notify fail "ripped but could not ship $work/$out to $movies/$name/"; exit 1; }
   what="movie \"$name\" (title $longest_t, $(hms "$longest_s"))"
 else
   sdir=$(printf 'Season %02d' "$season")
@@ -190,11 +201,11 @@ else
     n=$((n + 1))
   done
   rsync -t --mkpath --chmod=F0644 --ignore-existing --partial ./*.mkv "$dest/" || {
-    notify "ripped but could not ship $work to $dest/"; exit 1; }
+    notify fail "ripped but could not ship $work to $dest/"; exit 1; }
   what=$(printf '%s S%02dE%02d–E%02d (%d titles — check the order)' "$name" "$season" "$first" "$((n - 1))" "${#eps[@]}")
 fi
 
 eject "$dev" || true
 cd /
 rm -rf "$work"
-notify "ripped $what"
+notify ok "ripped $what"

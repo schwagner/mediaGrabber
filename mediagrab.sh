@@ -24,10 +24,22 @@ set -euo pipefail
 dev=${1:?usage: mediagrab <device>}
 [[ $dev == /dev/* ]] || dev=/dev/$dev
 
-notify() {
+notify() {  # notify <ok|fail|note> <message> — once per run, as it ends
+  local level=$1; shift
   echo "$*"
   command -v fleet-notify >/dev/null && fleet-notify "mediagrab: $*" || true
+  command -v mediagrab-popup >/dev/null && mediagrab-popup "$level" "$*" || true
+  notified=1
 }
+
+# Whatever set -e kills before a notify still gets a popup.
+crashed() {
+  local rc=$?
+  (( rc == 0 )) || [[ -n ${notified-} ]] ||
+    notify fail "mediagrab stopped unexpectedly (exit $rc) on ${dev:-the drive} — see journalctl -u 'mediagrab@*'"
+}
+
+trap crashed EXIT
 
 props=$(udevadm info --query=property --name="$dev")
 has() { grep -q "^$1" <<<"$props"; }
@@ -35,13 +47,13 @@ has() { grep -q "^$1" <<<"$props"; }
 if has 'ID_CDROM_MEDIA_TRACK_COUNT_AUDIO='; then
   exec cdrip "$dev"
 elif has 'ID_CDROM_MEDIA_BD'; then
-  notify "Blu-ray in $dev — not supported, left alone"
+  notify note "Blu-ray in $dev — not supported, left alone"
 elif has 'ID_CDROM_MEDIA_DVD' && lsdvd "$dev" >/dev/null 2>&1; then
   if [[ ${MEDIAGRAB_DVD:-1} == 1 ]]; then
     exec dvdrip "$dev"
   fi
-  notify "video DVD in $dev, but DVD ripping is off — left alone"
+  notify note "video DVD in $dev, but DVD ripping is off — left alone"
 else
   label=$(sed -n 's/^ID_FS_LABEL=//p' <<<"$props")
-  notify "data disc${label:+ \"$label\"} in $dev — not audio or video, left alone"
+  notify note "data disc${label:+ \"$label\"} in $dev — not audio or video, left alone"
 fi
