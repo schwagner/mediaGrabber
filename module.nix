@@ -5,12 +5,14 @@
 #   - services.mediagrabber.{enable,user,package}
 #   - services.mediagrabber.cd.{dest,offset}       audio CD -> FLAC
 #   - services.mediagrabber.dvd.{enable,movies,shows}  video DVD -> MKV
+#   - services.mediagrabber.data.dest              data disc -> .tar.zst
 #   - a udev rule starting mediagrab@<kernel name>.service on any media
 #     appearing in an sr* drive; mediagrab decides what the disc is
 #   - the mediagrab@ template unit (one rip per drive, runs as `user`)
-#   - cdrip/cdrip-ship/dvdrip on PATH with this config baked in, and `user`
+#   - cdrip/cdrip-ship/dvdrip/datarip on PATH with this config baked in, and `user`
 #     in cdrom, so the commands the notifications suggest just work
-#   - a polkit rule letting `user` block sleep from outside a session
+#   - a polkit rule letting `user` block sleep from outside a session, and
+#     (with data.dest) mount and unmount discs through udisks
 #
 # Was services.cdrip (CD only) until 0.2.0; the trigger moved from "has
 # audio tracks" to "has media" when DVDs arrived, so that the detection
@@ -47,6 +49,9 @@ let
     DVDRIP_SHOWS = cfg.dvd.shows;
     DVDRIP_STATE = "${state}/dvd";
     MEDIAGRAB_DVD = if cfg.dvd.enable then "1" else "0";
+  } // lib.optionalAttrs (cfg.data.dest != null) {
+    DATARIP_DEST = cfg.data.dest;
+    DATARIP_STATE = "${state}/data";
   };
 
   # The same commands with env baked in, for running by hand.
@@ -61,7 +66,7 @@ let
 in
 {
   options.services.mediagrabber = {
-    enable = lib.mkEnableOption "ripping every audio CD and video DVD inserted";
+    enable = lib.mkEnableOption "ripping every audio CD and video DVD inserted (and archiving data discs)";
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -118,10 +123,23 @@ in
         '';
       };
     };
+
+    data.dest = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "tinydaw.tf:/srv/archive";
+      description = ''
+        Where data discs (anything not audio or video) are archived, as
+        host:path: one Label_id.tar.zst per disc plus a Label_id.txt
+        listing. Compressed by zstd on that host, which must have it on
+        PATH. null leaves data discs alone.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ configured ];
+    services.udisks2.enable = lib.mkIf (cfg.data.dest != null) true;
     users.users.${cfg.user}.extraGroups = [ "cdrom" ];
 
     services.udev.extraRules = ''
@@ -145,9 +163,20 @@ in
       };
     };
 
+    # datarip mounts through udisks from outside any session, which udisks
+    # otherwise answers with auth_admin. Mount and unmount only — the -others
+    # unmount because udiskie usually did the mounting.
     security.polkit.extraConfig = ''
       polkit.addRule(function(action, subject) {
         if (action.id == "org.freedesktop.login1.inhibit-block-sleep" &&
+            subject.user == "${cfg.user}") {
+          return polkit.Result.YES;
+        }
+      });
+    '' + lib.optionalString (cfg.data.dest != null) ''
+      polkit.addRule(function(action, subject) {
+        if ((action.id.indexOf("org.freedesktop.udisks2.filesystem-mount") == 0 ||
+             action.id == "org.freedesktop.udisks2.filesystem-unmount-others") &&
             subject.user == "${cfg.user}") {
           return polkit.Result.YES;
         }

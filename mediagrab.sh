@@ -8,10 +8,11 @@
 # in an optical drive. Decides from udev's cdrom_id properties, plus lsdvd
 # for the one case those cannot settle:
 #
+#   blank                     -> notify only
 #   audio tracks              -> cdrip   (audio CD, enhanced CDs included)
-#   Blu-ray                   -> notify only; not supported
 #   DVD that lsdvd can read   -> dvdrip  (has a VIDEO_TS structure)
-#   anything else             -> notify only; a data disc is left alone
+#   anything else             -> datarip (data CD/DVD/BD -> .tar.zst), which
+#                                mounts it and leaves Blu-ray video alone
 #
 # Audio is tested first because an enhanced CD carries a data session too.
 # A DVD is only "video" if lsdvd can parse its IFOs — a burned DVD-R of
@@ -44,16 +45,18 @@ trap crashed EXIT
 props=$(udevadm info --query=property --name="$dev")
 has() { grep -q "^$1" <<<"$props"; }
 
-if has 'ID_CDROM_MEDIA_TRACK_COUNT_AUDIO='; then
+if has 'ID_CDROM_MEDIA_STATE=blank'; then
+  notify note "blank disc in $dev — left alone"
+elif has 'ID_CDROM_MEDIA_TRACK_COUNT_AUDIO='; then
   exec cdrip "$dev"
-elif has 'ID_CDROM_MEDIA_BD'; then
-  notify note "Blu-ray in $dev — not supported, left alone"
-elif has 'ID_CDROM_MEDIA_DVD' && lsdvd "$dev" >/dev/null 2>&1; then
+elif ! has 'ID_CDROM_MEDIA_BD' && has 'ID_CDROM_MEDIA_DVD' && lsdvd "$dev" >/dev/null 2>&1; then
   if [[ ${MEDIAGRAB_DVD:-1} == 1 ]]; then
     exec dvdrip "$dev"
   fi
   notify note "video DVD in $dev, but DVD ripping is off — left alone"
+elif [[ -n ${DATARIP_DEST-} ]]; then
+  exec datarip "$dev"
 else
   label=$(sed -n 's/^ID_FS_LABEL=//p' <<<"$props")
-  notify note "data disc${label:+ \"$label\"} in $dev — not audio or video, left alone"
+  notify note "data or Blu-ray disc${label:+ \"$label\"} in $dev — archiving is off, left alone"
 fi
