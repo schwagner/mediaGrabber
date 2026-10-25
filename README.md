@@ -1,20 +1,52 @@
 # mediaGrabber
 
-Insert an audio CD; get verified, tagged FLAC with cover art in a remote
-music library (Jellyfin, Navidrome, anything that watches a folder).
+Insert a disc; it ends up in your media library (Jellyfin, or anything
+that watches a folder). Audio CDs become verified, tagged FLAC; video DVDs
+become lossless MKV. NixOS module, everything open source.
 
-- **Rip:** [cyanrip](https://github.com/cyanreg/cyanrip) — cdparanoia-level
-  error correction, AccurateRip verification, MusicBrainz metadata, Cover Art
-  Archive art (embedded and as `cover.jpg`), `.log` and `.cue` per disc.
-- **Trigger:** udev starts `cdrip@sr0.service` when a disc with audio
-  tracks is inserted. Ejects when done.
-- **Ship:** rsync over SSH to `dest/Album Artist/Album (Year)/`.
-  Multi-disc sets share one folder.
-- **Unknown discs** (not in MusicBrainz) are ripped untagged and kept in
-  `/var/lib/cdrip/unmatched/` rather than polluting the library. Tag with
-  Picard, then `cdrip-ship /var/lib/cdrip/unmatched/<stamp>/rip`.
-- **Failures** leave the disc in the drive; retry with
-  `sudo systemctl start cdrip@sr0`. Logs: `journalctl -u cdrip@sr0`.
+When media appears in a drive, udev starts `mediagrab@sr0.service`, which
+works out what the disc is:
+
+| Disc | What happens |
+|---|---|
+| Audio CD | `cdrip`: cyanrip with AccurateRip, MusicBrainz tags, Cover Art Archive art → `music/Album Artist/Album (Year)/` |
+| Video DVD, film | `dvdrip`: main title remuxed by ffmpeg's `dvdvideo` demuxer → `movies/Name/Name.mkv` |
+| Video DVD, TV | each episode → `shows/Series/Season NN/Series SNNEMM.mkv`, numbered on from what is already there |
+| Blu-ray, data disc | left alone, with a notification |
+
+Everything is shipped by rsync over SSH and the disc is ejected.
+
+## CDs
+
+- Several MusicBrainz releases for one disc: takes the first, and says so.
+- Not in MusicBrainz: ripped untagged into `/var/lib/mediagrabber/cd/unmatched/`
+  instead of the library. Tag it with Picard, then `cdrip-ship <dir>`.
+- Set the drive's read offset once (`cyanrip -f -d /dev/sr0`), or every
+  track reports an AccurateRip mismatch.
+
+## DVDs
+
+The DVD is **remuxed, not re-encoded**: MPEG-2 video, every audio track,
+subtitles and chapters, untouched. Fast (read-speed bound) and lossless, at
+4–8 GB a film. CSS is handled by libdvdcss.
+
+A DVD carries no metadata except its volume label, so the name comes from
+that: `THE_MATRIX_WS` → `The Matrix`, `FRIENDS_S1_D2` → Friends season 1.
+Jellyfin then finds the film or show on TMDb by name; fix a wrong match
+with *Identify*. TV discs must go in in order.
+
+When guessing would be wrong, nothing is ripped: the disc stays in the
+drive, and the notification lists the titles and the command to run:
+
+- label is generic (`DVD_VIDEO`, `DISC1`)
+- TV-shaped disc with no season in the label
+- several titles of identical length (copy-protection decoys)
+- nothing longer than 40 minutes
+
+```sh
+dvdrip /dev/sr0 movie "Cars (2006)" 3       # title 3 as the film
+dvdrip /dev/sr0 show "The Office (US)" 2    # episodes as season 2
+```
 
 ## NixOS
 
@@ -22,17 +54,18 @@ music library (Jellyfin, Navidrome, anything that watches a folder).
 inputs.mediagrabber.url = "github:schwagner/mediaGrabber";
 # ...
 imports = [ mediagrabber.nixosModules.default ];
-services.cdrip = {
+services.mediagrabber = {
   enable = true;
-  user = "andrew";                       # its SSH key must reach dest
-  dest = "tinydaw.tf:/srv/media/music";
-  offset = 6;                            # your drive's read offset
+  user = "andrew";                           # its SSH key must reach the dests
+  cd.dest = "tinydaw.tf:/srv/media/music";
+  cd.offset = 6;
+  dvd.movies = "tinydaw.tf:/srv/media/movies";
+  dvd.shows  = "tinydaw.tf:/srv/media/shows";
 };
 ```
 
-Find the drive offset once with a well-known disc: `cyanrip -f -d /dev/sr0`,
-or look the drive up at <https://www.accuraterip.com/driveoffsets.htm>.
-With a wrong offset every track reports an AccurateRip mismatch (the audio
-is still fine, shifted by a few samples).
+Logs: `journalctl -u mediagrab@sr0`. A failed rip leaves the disc in the
+drive; retry with `sudo systemctl start mediagrab@sr0`. If `fleet-notify`
+is on PATH, every outcome is reported through it.
 
-If `fleet-notify` is on PATH, each rip reports its outcome through it.
+Tests for the DVD decisions (no drive needed): `bash tests/dvdrip-test.sh`.

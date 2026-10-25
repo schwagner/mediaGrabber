@@ -1,5 +1,5 @@
 {
-  description = "mediaGrabber — insert a CD, get tagged FLAC in the Jellyfin library";
+  description = "mediaGrabber — insert a CD or DVD, get it in the Jellyfin library";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
 

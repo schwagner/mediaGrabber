@@ -4,8 +4,8 @@
 #
 # Usage: cdrip <device>        e.g. cdrip /dev/sr0
 #
-# Run by cdrip@<dev>.service, which udev starts when a disc with audio
-# tracks appears. Can be run by hand with the same argument.
+# Run by mediagrab (mediagrab@<dev>.service) when the disc has audio
+# tracks. Can be run by hand with the same argument.
 #
 # Pipeline:
 #   1. cyanrip rips to $CDRIP_STATE/staging/<stamp>/rip — paranoia,
@@ -28,7 +28,7 @@
 #                       `cdrip-ship <dir>` to send it on.
 #
 # A failed rip never ejects, so the disc stays in the drive to be cleaned
-# and retried with `systemctl start cdrip@sr0`.
+# and retried with `systemctl start mediagrab@sr0`.
 # ============================================================
 set -euo pipefail
 

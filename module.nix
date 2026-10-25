@@ -1,12 +1,20 @@
 # ============================================================
-# module.nix — services.cdrip: rip every audio CD inserted, ship to a library
+# module.nix — services.mediagrabber: rip every disc inserted, ship it on
 #
 # Contains:
-#   - services.cdrip.{enable,user,dest,offset,package}
-#   - a udev rule that starts cdrip@<kernel name>.service when a disc with
-#     audio tracks appears in any sr* drive
-#   - the cdrip@ template unit (one rip per drive, runs as `user`)
+#   - services.mediagrabber.{enable,user,package}
+#   - services.mediagrabber.cd.{dest,offset}       audio CD -> FLAC
+#   - services.mediagrabber.dvd.{enable,movies,shows}  video DVD -> MKV
+#   - a udev rule starting mediagrab@<kernel name>.service on any media
+#     appearing in an sr* drive; mediagrab decides what the disc is
+#   - the mediagrab@ template unit (one rip per drive, runs as `user`)
+#   - cdrip/cdrip-ship/dvdrip on PATH with this config baked in, and `user`
+#     in cdrom, so the commands the notifications suggest just work
 #   - a polkit rule letting `user` block sleep from outside a session
+#
+# Was services.cdrip (CD only) until 0.2.0; the trigger moved from "has
+# audio tracks" to "has media" when DVDs arrived, so that the detection
+# lives in one script rather than in a growing set of udev matches.
 #
 # RUN AS THE USER, NOT A DynamicUser. The unit ships with that user's own
 # SSH key and known_hosts, so the files land on the far side owned by
@@ -28,72 +36,111 @@ self:
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.services.cdrip;
+  cfg = config.services.mediagrabber;
+  state = "/var/lib/mediagrabber";
+
+  env = {
+    CDRIP_DEST = cfg.cd.dest;
+    CDRIP_OFFSET = toString cfg.cd.offset;
+    CDRIP_STATE = "${state}/cd";
+    DVDRIP_MOVIES = cfg.dvd.movies;
+    DVDRIP_SHOWS = cfg.dvd.shows;
+    DVDRIP_STATE = "${state}/dvd";
+    MEDIAGRAB_DVD = if cfg.dvd.enable then "1" else "0";
+  };
+
+  # The same commands with env baked in, for running by hand.
+  configured = pkgs.runCommand "mediagrabber-configured" {
+    nativeBuildInputs = [ pkgs.makeWrapper ];
+  } ''
+    for b in ${cfg.package}/bin/*; do
+      makeWrapper "$b" "$out/bin/$(basename "$b")" \
+        ${lib.concatStringsSep " " (lib.mapAttrsToList (k: v: "--set ${k} ${lib.escapeShellArg v}") env)}
+    done
+  '';
 in
 {
-  options.services.cdrip = {
-    enable = lib.mkEnableOption "automatic CD ripping to FLAC on disc insert";
+  options.services.mediagrabber = {
+    enable = lib.mkEnableOption "ripping every audio CD and video DVD inserted";
 
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      description = "The cdrip package.";
+      description = "The mediagrabber package.";
     };
 
     user = lib.mkOption {
       type = lib.types.str;
       example = "andrew";
       description = ''
-        Account the rip runs as. Its SSH key must reach `dest`, and the
-        staging area /var/lib/cdrip is owned by it.
+        Account the rip runs as. Its SSH key must reach the destinations,
+        it owns ${state}, and it is added to the cdrom group.
       '';
     };
 
-    dest = lib.mkOption {
-      type = lib.types.str;
-      example = "tinydaw.tf:/srv/media/music";
-      description = ''
-        rsync destination, host:path. Albums land in
-        path/Album Artist/Album (Year)/.
-      '';
+    cd = {
+      dest = lib.mkOption {
+        type = lib.types.str;
+        example = "tinydaw.tf:/srv/media/music";
+        description = ''
+          rsync destination for albums, host:path. They land in
+          path/Album Artist/Album (Year)/.
+        '';
+      };
+      offset = lib.mkOption {
+        type = lib.types.int;
+        default = 0;
+        description = ''
+          Drive read offset in samples. Find it once with a disc that is
+          in AccurateRip: `cyanrip -f`. Wrong offset = every track reports
+          an AccurateRip mismatch.
+        '';
+      };
     };
 
-    offset = lib.mkOption {
-      type = lib.types.int;
-      default = 0;
-      description = ''
-        Drive read offset in samples. Find it once with a disc that is in
-        AccurateRip: `cyanrip -f`, or the drive's entry at
-        accuraterip.com/driveoffsets.htm. Wrong offset = every track
-        reports an AccurateRip mismatch.
-      '';
+    dvd = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Rip video DVDs as well as audio CDs.";
+      };
+      movies = lib.mkOption {
+        type = lib.types.str;
+        example = "tinydaw.tf:/srv/media/movies";
+        description = "rsync destination for films: path/Name/Name.mkv.";
+      };
+      shows = lib.mkOption {
+        type = lib.types.str;
+        example = "tinydaw.tf:/srv/media/shows";
+        description = ''
+          rsync destination for TV discs:
+          path/Series/Season NN/Series SNNEMM.mkv.
+        '';
+      };
     };
   };
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ cfg.package ];
+    environment.systemPackages = [ configured ];
+    users.users.${cfg.user}.extraGroups = [ "cdrom" ];
 
     services.udev.extraRules = ''
-      SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ACTION=="change", ENV{ID_CDROM_MEDIA_TRACK_COUNT_AUDIO}=="?*", RUN+="${pkgs.systemd}/bin/systemctl --no-block start cdrip@%k.service"
+      SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ACTION=="change", ENV{ID_CDROM_MEDIA}=="1", RUN+="${pkgs.systemd}/bin/systemctl --no-block start mediagrab@%k.service"
     '';
 
-    systemd.services."cdrip@" = {
-      description = "Rip audio CD in /dev/%i to FLAC";
+    systemd.services."mediagrab@" = {
+      description = "Rip the disc in /dev/%i";
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       # fleet-notify (or any notifier) comes from the system profile.
       path = [ "/run/current-system/sw" ];
-      environment = {
-        CDRIP_DEST = cfg.dest;
-        CDRIP_OFFSET = toString cfg.offset;
-        CDRIP_STATE = "/var/lib/cdrip";
-      };
+      environment = env;
       serviceConfig = {
         Type = "exec";
         User = cfg.user;
         SupplementaryGroups = [ "cdrom" ];
-        StateDirectory = "cdrip";
-        ExecStart = "${pkgs.systemd}/bin/systemd-inhibit --what=sleep:idle --who=cdrip --why='Ripping CD' ${lib.getExe cfg.package} /dev/%i";
+        StateDirectory = "mediagrabber";
+        ExecStart = "${pkgs.systemd}/bin/systemd-inhibit --what=sleep:idle --who=mediagrabber --why='Ripping a disc' ${lib.getExe cfg.package} /dev/%i";
         TimeoutStartSec = "infinity";
       };
     };

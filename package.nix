@@ -1,22 +1,41 @@
-# cdrip and cdrip-ship (the same script; the second wrapper sets CDRIP_MODE=ship), with their
-# runtime tools pinned on PATH so the unit does not depend on the system
-# profile. fleet-notify is the exception: it is host config, found at run
-# time and skipped if absent.
+# mediagrab (the dispatcher udev runs), cdrip, cdrip-ship and dvdrip, each a
+# wrapper with the runtime tools pinned on PATH so the unit does not depend
+# on the system profile. fleet-notify is the exception: it is host config,
+# found at run time and skipped if absent.
+#
+# ffmpeg is the headless build with libdvdnav/libdvdread switched on for
+# the dvdvideo demuxer. Neither default ffmpeg has it; ffmpeg-full does,
+# but drags in ~140 MB of codecs this never uses. The override is not in
+# cache.nixos.org, so it builds once per nixpkgs bump (a few minutes).
+# libdvdread links libdvdcss in nixpkgs, which is what decrypts CSS.
 { lib, stdenvNoCC, makeWrapper, bash, cyanrip, flac, rsync, openssh,
-  coreutils, findutils, gnugrep, gnused, util-linux }:
+  coreutils, findutils, gnugrep, gnused, gawk, util-linux, systemd, lsdvd,
+  ffmpeg-headless }:
 
+let
+  ffmpeg = ffmpeg-headless.override { withDvdnav = true; withDvdread = true; };
+  path = lib.makeBinPath [
+    bash cyanrip flac rsync openssh coreutils findutils gnugrep gnused gawk
+    util-linux systemd lsdvd ffmpeg
+  ];
+in
 stdenvNoCC.mkDerivation {
-  pname = "cdrip";
-  version = "0.1.0";
-  src = ./cdrip.sh;
-  dontUnpack = true;
+  pname = "mediagrabber";
+  version = "0.2.0";
+  src = ./.;
   nativeBuildInputs = [ makeWrapper ];
   installPhase = ''
-    install -Dm755 $src $out/libexec/cdrip
-    patchShebangs $out/libexec/cdrip
-    path=${lib.makeBinPath [ bash cyanrip flac rsync openssh coreutils findutils gnugrep gnused util-linux ]}
-    makeWrapper $out/libexec/cdrip $out/bin/cdrip --prefix PATH : $path
-    makeWrapper $out/libexec/cdrip $out/bin/cdrip-ship --prefix PATH : $path --set CDRIP_MODE ship
+    for s in mediagrab cdrip dvdrip; do
+      install -Dm755 $s.sh $out/libexec/$s
+    done
+    patchShebangs $out/libexec
+    # Every wrapper gets the same PATH, $out/bin first, so mediagrab can
+    # exec cdrip/dvdrip by name.
+    for s in mediagrab cdrip dvdrip; do
+      makeWrapper $out/libexec/$s $out/bin/$s --prefix PATH : $out/bin:${path}
+    done
+    makeWrapper $out/libexec/cdrip $out/bin/cdrip-ship --prefix PATH : $out/bin:${path} --set CDRIP_MODE ship
   '';
-  meta.mainProgram = "cdrip";
+  passthru = { inherit ffmpeg; };
+  meta.mainProgram = "mediagrab";
 }
