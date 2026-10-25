@@ -97,11 +97,11 @@ mkdir -p "$work"
 size=$(du -sb "$mnt" | cut -f1)
 part="$final.part"
 
-echo "archiving $mnt ($((size / 1048576)) MiB) to $host:$final"
+echo "archiving $mnt ($(numfmt --to=iec "$size")) to $host:$final"
 # -vv with --index-file: the ls -l style listing goes to the file, not the
 # stream. --transform puts everything under $name/ (safe() leaves no
 # characters sed would read specially).
-if ! tar -C "$mnt" -cvv --index-file="$work/index.txt" --transform="s,^\.,$name," -f - . |
+if ! tar -C "$mnt" -cvv --show-transformed-names --index-file="$work/index.txt" --transform="s,^\.,$name," -f - . |
      remote "mkdir -p $(q "$path") && nice zstd -q -T0 -$level > $(q "$part")"; then
   remote "rm -f $(q "$part")" || true
   notify fail "archiving data disc $shown FAILED (read error? network?) — see journalctl -u 'mediagrab@*'"
@@ -113,4 +113,4 @@ packed=$(remote "cat > $(q "$path/$name.txt") && mv $(q "$part") $(q "$final") &
 unmount
 eject "$dev" || true
 rm -rf "$work"
-notify ok "archived data disc $shown → $host:$final ($((size / 1048576)) MiB, $((packed / 1048576)) MiB packed)"
+notify ok "archived data disc $shown → $host:$final ($(numfmt --to=iec "$size"), $(numfmt --to=iec "$packed") packed)"

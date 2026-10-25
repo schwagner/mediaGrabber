@@ -37,7 +37,7 @@ seq 100000 > "$tmp/disc/notes.txt"
 
 run
 check "tarball lands under Label_UUID"   test -f "$tmp/remote/$name.tar.zst"
-check "listing alongside"                grep -q "DCIM/100/img 1.jpg" "$tmp/remote/$name.txt"
+check "listing alongside"                grep -q "$name/DCIM/100/img 1.jpg" "$tmp/remote/$name.txt"
 check "no .part left"                    test ! -e "$tmp/remote/$name.tar.zst.part"
 mkdir "$tmp/out"; zstd -dc "$tmp/remote/$name.tar.zst" | tar -C "$tmp/out" -xf -
 check "round trip, under one top dir"    cmp -s "$tmp/disc/DCIM/100/img 1.jpg" "$tmp/out/$name/DCIM/100/img 1.jpg"
