@@ -25,8 +25,15 @@
 # it never slows the rip; -19 (~18 MB/s) would. zstd must be on the far
 # side's PATH for a non-interactive SSH login.
 #
-# A read error fails the run: nothing is kept, the disc stays in the drive
-# to be cleaned and retried with `systemctl start mediagrab@sr0`.
+# DAMAGED DISCS ARE SALVAGED. Old CD-Rs fade, and one bad patch should not
+# cost the rest of the disc. tar carries on past a file it cannot read
+# (padding it with zeros, or leaving it out) and exits non-zero; when the
+# far side still took the whole stream, the archive is kept as
+# <Label>_<id>.damaged.tar.zst, and its .damaged.txt starts with tar's
+# complaints, so the bad files are named. The disc is ejected to be cleaned
+# or tried in another drive: reinserting it archives it again, since only a
+# clean archive counts as done, and a clean one replaces the damaged one.
+# A failure on the SSH/zstd side keeps nothing.
 # ============================================================
 set -euo pipefail
 
@@ -100,17 +107,41 @@ part="$final.part"
 echo "archiving $mnt ($(numfmt --to=iec "$size")) to $host:$final"
 # -vv with --index-file: the ls -l style listing goes to the file, not the
 # stream. --transform puts everything under $name/ (safe() leaves no
-# characters sed would read specially).
-if ! tar -C "$mnt" -cvv --show-transformed-names --index-file="$work/index.txt" --transform="s,^\.,$name," -f - . |
-     remote "mkdir -p $(q "$path") && nice zstd -q -T0 -$level > $(q "$part")"; then
+# characters sed would read specially). tar's stderr is only its complaints.
+set +e
+tar -C "$mnt" -cvv --show-transformed-names --index-file="$work/index.txt" --transform="s,^\.,$name," -f - . \
+    2>"$work/errors.txt" |
+  remote "mkdir -p $(q "$path") && nice zstd -q -T0 -$level > $(q "$part")"
+rc=("${PIPESTATUS[@]}")
+set -e
+cat "$work/errors.txt" >&2
+if (( rc[1] != 0 )); then
   remote "rm -f $(q "$part")" || true
-  notify fail "archiving data disc $shown FAILED (read error? network?) — see journalctl -u 'mediagrab@*'"
+  notify fail "archiving data disc $shown FAILED on the $host side (network? disk full?) — see journalctl -u 'mediagrab@*'"
   exit 1
 fi
-packed=$(remote "cat > $(q "$path/$name.txt") && mv $(q "$part") $(q "$final") && stat -c %s $(q "$final")" \
-  < "$work/index.txt") || { notify fail "archived $shown but could not finish $host:$final"; exit 1; }
+
+out="$path/$name"
+if (( rc[0] == 0 )); then
+  cp "$work/index.txt" "$work/listing.txt"
+  tidy="rm -f $(q "$out.damaged.tar.zst") $(q "$out.damaged.txt")"
+else
+  out+=.damaged
+  bad=$(grep -c '^tar: ' "$work/errors.txt" || true)
+  { echo "# DAMAGED: tar exited $rc, $bad problem(s) reading the disc:"
+    sed 's/^/# /' "$work/errors.txt"
+    echo
+    cat "$work/index.txt"; } > "$work/listing.txt"
+  tidy=:
+fi
+packed=$(remote "cat > $(q "$out.txt") && mv $(q "$part") $(q "$out.tar.zst") && $tidy && stat -c %s $(q "$out.tar.zst")" \
+  < "$work/listing.txt") || { notify fail "archived $shown but could not finish $host:$out.tar.zst"; exit 1; }
 
 unmount
 eject "$dev" || true
 rm -rf "$work"
-notify ok "archived data disc $shown → $host:$final ($(numfmt --to=iec "$size"), $(numfmt --to=iec "$packed") packed)"
+if (( rc[0] != 0 )); then
+  notify note "data disc $shown is DAMAGED — kept what could be read as $host:$out.tar.zst ($(numfmt --to=iec "$packed") packed); $bad problem(s) listed at the top of $out.txt. Clean it or try another drive, then reinsert."
+  exit 0
+fi
+notify ok "archived data disc $shown → $host:$out.tar.zst ($(numfmt --to=iec "$size"), $(numfmt --to=iec "$packed") packed)"

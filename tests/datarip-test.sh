@@ -49,9 +49,23 @@ check "same disc again -> skipped"       grep -q 'already archived' "$NOTES"
 FAKE_UUID=2010-01-01-00-00-00-00
 chmod 000 "$tmp/disc/notes.txt"
 run
-check "read error -> fail"               grep -q 'FAILED' "$NOTES"
-check "read error -> nothing kept"       bash -c "! ls '$tmp/remote' | grep -q 2010"
+d=Photos_2009_2010-01-01-00-00-00-00
+check "read error -> damaged note"       grep -q 'DAMAGED' "$NOTES"
+check "read error -> .damaged kept"      test -f "$tmp/remote/$d.damaged.tar.zst"
+check "no clean name for damaged"        test ! -e "$tmp/remote/$d.tar.zst"
+check "bad file named in listing"        grep -q '^# tar: ./notes.txt' "$tmp/remote/$d.damaged.txt"
+mkdir "$tmp/out2"; zstd -dc "$tmp/remote/$d.damaged.tar.zst" | tar -C "$tmp/out2" -xf -
+check "readable files salvaged"          cmp -s "$tmp/disc/DCIM/100/img 1.jpg" "$tmp/out2/$d/DCIM/100/img 1.jpg"
 chmod 644 "$tmp/disc/notes.txt"
+run
+check "clean retry -> clean archive"     test -f "$tmp/remote/$d.tar.zst"
+check "clean retry drops .damaged"       bash -c "! ls '$tmp/remote' | grep -q damaged"
+
+FAKE_UUID=2011-01-01-00-00-00-00
+touch "$tmp/notadir"
+DATARIP_DEST="fake:$tmp/notadir/x" run
+check "far side fails -> FAILED"         grep -q 'FAILED' "$NOTES"
+check "far side fails -> nothing kept"   bash -c "! ls '$tmp/remote' | grep -q 2011"
 
 mkdir "$tmp/disc/BDMV"
 run

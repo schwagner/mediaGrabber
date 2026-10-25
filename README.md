@@ -69,8 +69,14 @@ and inserting it again just ejects it. Unpack with
 The disc is mounted through udisks (udiskie usually got there first) and
 read with tar; the plain tar stream goes over SSH and the far side runs
 `zstd -T0 -15`, so the ripping laptop does no compression. That level runs
-far faster than a drive reads; the far side needs `zstd` on PATH. A read
-error keeps nothing and leaves the disc in the drive.
+far faster than a drive reads; the far side needs `zstd` on PATH.
+
+A disc with read errors is salvaged rather than lost: tar skips or
+zero-pads what it cannot read, and the result is kept as
+`Label_id.damaged.tar.zst`, with tar's complaints (the bad files) at the top
+of `Label_id.damaged.txt`. The disc is ejected; clean it or try another
+drive and reinsert it, and a clean read replaces the damaged archive. A
+failure on the far side (network, disk full) keeps nothing.
 
 ## NixOS
 
