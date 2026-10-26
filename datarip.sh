@@ -102,7 +102,9 @@ fi
 # --- archive -------------------------------------------------------------
 work=$state/$name
 mkdir -p "$work"
-size=$(du -sb "$mnt" | cut -f1)
+# Only for the messages. du gives up on what tar will report anyway (an
+# unreadable patch, a dangling entry left by the burner), so it may fail.
+size=$( (du -sb "$mnt" 2>/dev/null || true) | cut -f1)
 part="$final.part"
 
 echo "archiving $mnt ($(numfmt --to=iec "$size")) to $host:$final"

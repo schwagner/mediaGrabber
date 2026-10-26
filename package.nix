@@ -22,7 +22,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "mediagrabber";
-  version = "0.5.1";
+  version = "0.5.2";
   src = ./.;
   nativeBuildInputs = [ makeWrapper ];
   installPhase = ''

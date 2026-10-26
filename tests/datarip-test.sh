@@ -49,6 +49,7 @@ check "same disc again -> skipped"       grep -q 'already archived' "$NOTES"
 
 FAKE_UUID=2010-01-01-00-00-00-00
 chmod 000 "$tmp/disc/notes.txt"
+mkdir "$tmp/disc/locked"; chmod 000 "$tmp/disc/locked"  # du fails too
 run
 d=Photos_2009_2010-01-01-00-00-00-00
 check "read error -> damaged note"       grep -q 'DAMAGED' "$NOTES"
@@ -57,7 +58,7 @@ check "no clean name for damaged"        test ! -e "$tmp/remote/$d.tar.zst"
 check "bad file named in listing"        grep -q '^# tar: ./notes.txt' "$tmp/remote/$d.damaged.txt"
 mkdir "$tmp/out2"; zstd -dc "$tmp/remote/$d.damaged.tar.zst" | tar -C "$tmp/out2" -xf -
 check "readable files salvaged"          cmp -s "$tmp/disc/DCIM/100/img 1.jpg" "$tmp/out2/$d/DCIM/100/img 1.jpg"
-chmod 644 "$tmp/disc/notes.txt"
+chmod 644 "$tmp/disc/notes.txt"; rmdir "$tmp/disc/locked"
 run
 check "clean retry -> clean archive"     test -f "$tmp/remote/$d.tar.zst"
 check "clean retry drops .damaged"       bash -c "! ls '$tmp/remote' | grep -q damaged"
