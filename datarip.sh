@@ -85,7 +85,8 @@ fi
 # udisks ourselves as well, and take whichever mount shows up.
 mnt=""
 for _ in $(seq 20); do
-  mnt=$(findmnt -nro TARGET --source "$dev" | head -n1 || true)
+  # -r escapes the awkward characters (a space is \x20); %b undoes that.
+  mnt=$(printf '%b' "$(findmnt -nro TARGET --source "$dev" | head -n1 || true)")
   [[ -n $mnt ]] && break
   udisksctl mount -b "$dev" --no-user-interaction >/dev/null 2>&1 || sleep 1
 done

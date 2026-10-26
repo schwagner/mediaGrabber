@@ -7,13 +7,14 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'chmod -R u+rwX "$tmp"; rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/remote" "$tmp/disc"
+mkdir -p "$tmp/bin" "$tmp/remote" "$tmp/K3b data project"; ln -s "K3b data project" "$tmp/disc"
 
 cat > "$tmp/bin/udevadm" <<'S'
 #!/usr/bin/env bash
 printf 'ID_FS_LABEL=%s\nID_FS_UUID=%s\n' "$FAKE_LABEL" "$FAKE_UUID"
 S
-printf '#!/bin/sh\necho "$FAKE_MNT"\n' > "$tmp/bin/findmnt"
+# Like the real `findmnt -r`: a space comes out as \x20.
+printf '#!/usr/bin/env bash\necho "${FAKE_MNT// /\\\\x20}"\n' > "$tmp/bin/findmnt"
 printf '#!/bin/sh\n:\n' > "$tmp/bin/udisksctl"
 printf '#!/bin/sh\n:\n' > "$tmp/bin/eject"
 printf '#!/bin/sh\necho "$*" >> "$NOTES"\n' > "$tmp/bin/fleet-notify"
@@ -21,7 +22,7 @@ printf '#!/usr/bin/env bash\nexec bash -c "$2"\n' > "$tmp/bin/ssh"
 chmod +x "$tmp/bin"/*
 
 export PATH="$tmp/bin:$PATH" DATARIP_STATE="$tmp/state" NOTES="$tmp/notes"
-export DATARIP_DEST="fake:$tmp/remote" FAKE_MNT="$tmp/disc"
+export DATARIP_DEST="fake:$tmp/remote" FAKE_MNT="$tmp/K3b data project"
 export FAKE_LABEL="Photos 2009" FAKE_UUID=2009-03-14-12-00-00-00
 name=Photos_2009_2009-03-14-12-00-00-00
 
