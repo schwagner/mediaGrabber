@@ -42,20 +42,24 @@ crashed() {
 
 trap crashed EXIT
 
+# No idle suspend mid-rip. dvdrip takes this itself once it knows what to
+# rip, so a disc waiting on a question does not keep the machine awake.
+inhibit=(systemd-inhibit --what=sleep:idle --who=mediagrabber --why="Ripping a disc")
+
 props=$(udevadm info --query=property --name="$dev")
 has() { grep -q "^$1" <<<"$props"; }
 
 if has 'ID_CDROM_MEDIA_STATE=blank'; then
   notify note "blank disc in $dev — left alone"
 elif has 'ID_CDROM_MEDIA_TRACK_COUNT_AUDIO='; then
-  exec cdrip "$dev"
+  exec "${inhibit[@]}" cdrip "$dev"
 elif ! has 'ID_CDROM_MEDIA_BD' && has 'ID_CDROM_MEDIA_DVD' && lsdvd "$dev" >/dev/null 2>&1; then
   if [[ ${MEDIAGRAB_DVD:-1} == 1 ]]; then
     exec dvdrip "$dev"
   fi
   notify note "video DVD in $dev, but DVD ripping is off — left alone"
 elif [[ -n ${DATARIP_DEST-} ]]; then
-  exec datarip "$dev"
+  exec "${inhibit[@]}" datarip "$dev"
 else
   label=$(sed -n 's/^ID_FS_LABEL=//p' <<<"$props")
   notify note "data or Blu-ray disc${label:+ \"$label\"} in $dev — archiving is off, left alone"

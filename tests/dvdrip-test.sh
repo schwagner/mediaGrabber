@@ -28,7 +28,7 @@ exec $real_rsync "\${a[@]}"
 S
 chmod +x "$tmp/bin"/*
 
-export PATH="$tmp/bin:$PATH" DVDRIP_STATE="$tmp/state" NOTES="$tmp/notes"
+export MEDIAGRAB_INHIBITED=1 PATH="$tmp/bin:$PATH" DVDRIP_STATE="$tmp/state" NOTES="$tmp/notes"
 export DVDRIP_MOVIES=fake:/movies DVDRIP_SHOWS=fake:/shows
 
 disc() {  # disc <label> <h:mm:ss>...  -> canned lsdvd output
@@ -84,6 +84,44 @@ check "override: movie, chosen title"     grep -qx "title 3" "$tmp/remote/movies
 EXTRA=(show "The Office (US)" 2)
 run THE_OFFICE 0:22:00 0:21:30 0:22:15
 check "override: show + season"           test -f "$tmp/remote/shows/The Office (US)/Season 02/The Office (US) S02E03.mkv"
+
+# The popup's buttons: a stub mediagrab-ask answers each question with
+# the next line of $ANSWERS (none left = dismissed).
+cat > "$tmp/bin/mediagrab-ask" <<'S'
+#!/usr/bin/env bash
+printf '%s\n' "${*: -1}" >> "$ASKED"
+a=$(head -n1 "$ANSWERS"); sed -i 1d "$ANSWERS"
+[[ -n $a ]] && echo "$a"
+S
+printf '#!/bin/sh\necho ejected >> "$NOTES"\n' > "$tmp/bin/eject"
+chmod +x "$tmp/bin"/*
+export ANSWERS=$tmp/answers ASKED=$tmp/asked
+answer() { printf '%s\n' "$@" > "$ANSWERS"; : > "$NOTES"; }
+EXTRA=()
+
+answer t3
+run PIXAR 1:56:00 1:56:01 1:55:59 1:56:02
+check "button: decoy title 3 -> movie"    grep -qx "title 3" "$tmp/remote/movies/Pixar/Pixar.mkv"
+
+answer "reply Up (2009)"
+run DVD_VIDEO 1:36:00 0:05:00
+check "reply: generic label named, ripped" grep -qx "title 1" "$tmp/remote/movies/Up (2009)/Up (2009).mkv"
+
+answer "reply Scrubs" s2
+run DISC1 0:22:00 0:21:30 0:22:15
+check "reply+button: name then season 2"  test -f "$tmp/remote/shows/Scrubs/Season 02/Scrubs S02E03.mkv"
+
+answer "reply 4"
+run COMMUNITY 0:22:00 0:21:30 0:22:15
+check "reply: season typed"               test -f "$tmp/remote/shows/Community/Season 04/Community S04E03.mkv"
+
+answer eject
+run HEROES 0:43:00 0:42:10 0:44:05
+check "button: eject, nothing ripped"     bash -c "grep -qx ejected '$NOTES' && test ! -e '$tmp/remote/shows/Heroes'"
+
+answer
+run MONK 0:43:00 0:42:10 0:44:05
+check "dismissed: left in, nothing ripped" bash -c "! grep -q ejected '$NOTES' && test ! -e '$tmp/remote/shows/Monk'"
 
 [[ -n ${SHOW_NOTES:-} ]] && cat "$NOTES"
 echo "$pass passed, $fail failed"

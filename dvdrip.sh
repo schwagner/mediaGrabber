@@ -34,11 +34,15 @@
 # are numbered on from the highest SxxEyy already in that season's folder
 # on the far side, so discs must go in in order.
 #
-# "Needs a decision" ejects nothing and rips nothing: the disc stays in the
-# drive and the notification carries the title list and the command to run.
+# "Needs a decision" asks on the desktop: a popup with buttons (a title, a
+# season, Eject) and, where a name or season must be typed, a reply field.
+# The answer starts the matching override run. Unanswered, dismissed, or the
+# disc taken out: nothing is ripped or ejected, and the fleet-notify message
+# carries the title list and the commands to run by hand.
 # ============================================================
 set -euo pipefail
 
+args=("$@")
 dev=${1:?usage: dvdrip <device> [movie "<Name (Year)>" [title] | show "<Series>" <season> [first ep]]}
 [[ $dev == /dev/* ]] || dev=/dev/$dev
 mode=${2:-auto}
@@ -83,11 +87,52 @@ while read -r t s; do len[$t]=$s; done < <(
 titles_by_len() { for t in "${!len[@]}"; do echo "${len[$t]} $t"; done | sort -rn; }
 summary() { titles_by_len | head -n8 | while read -r s t; do printf 'title %d %s; ' "$t" "$(hms "$s")"; done; }
 
-decide() {  # print the reason and the commands, leave the disc in, exit
-  notify note "\"$label\" needs a decision: $1. Titles: $(summary)Run one of:
+decide() {  # decide <reason> — ask on the desktop; unanswered, leave the disc in
+  local why=$1 a nm=$name t s buttons=() field=()
+  local msg="\"$label\" needs a decision: $why. Titles: $(summary)Run one of:
   dvdrip $dev movie \"Name (Year)\" [title]
   dvdrip $dev show \"Series\" <season> [first episode]"
+  echo "$msg"
+  command -v fleet-notify >/dev/null && fleet-notify "dvdrip: $msg" || true
+  notified=1
+
+  # The buttons. A generic label needs a name first, typed into the popup.
+  if (( generic )); then
+    a=$(ask --reply "Name (Year), or the series" \
+          "\"$label\": $why. What is it called? Titles: $(summary)" eject=Eject) || leave
+    [[ $a == reply\ * ]] || leave "$a"
+    nm=${a#reply }
+    [[ $kind == movie ]] && again movie "$nm"
+  fi
+  case $kind in
+    decoys)
+      while read -r s t; do buttons+=("t$t=Title $t ($(hms "$s"))"); done < <(
+        titles_by_len | awk -v L="$longest_s" '$1*50 >= L*49' | head -n3) ;;
+    show)
+      buttons=("s1=Season 1" "s2=Season 2" "t$longest_t=Film: title $longest_t") ;;
+    *)
+      buttons=("t$longest_t=Film: title $longest_t ($(hms "$longest_s"))") ;;
+  esac
+  [[ $kind == show ]] && field=(--reply "Season number")
+  a=$(ask "${field[@]}" "\"$nm\": $why. Titles: $(summary)" "${buttons[@]}" eject=Eject) || leave
+  case $a in
+    t*)                     again movie "$nm" "${a#t}" ;;
+    s*)                     again show "$nm" "${a#s}" ;;
+    reply\ [0-9]|reply\ [0-9][0-9]) again show "$nm" "${a#reply }" ;;
+    *)                      leave "$a" ;;
+  esac
+}
+ask() {  # the question as a popup with buttons; prints the answer
+  command -v mediagrab-ask >/dev/null || return 1
+  mediagrab-ask --while "udevadm info --query=property --name=$(printf %q "$dev") | grep -qx ID_CDROM_MEDIA=1" "$@"
+}
+leave() {  # leave [eject] — no rip; eject only if asked to
+  [[ ${1-} == eject ]] && { eject "$dev" || true; }
   exit 0
+}
+again() {  # again <dvdrip args after the device> — the answer, as a fresh run
+  echo "answered: $*"
+  exec "$BASH" "${BASH_SOURCE[0]}" "$dev" "$@"
 }
 
 # --- name from the volume label ---------------------------------------
@@ -160,6 +205,10 @@ case $mode in
   *) echo "unknown mode $mode" >&2; exit 2 ;;
 esac
 name=$(clean "$name")
+
+# Decided: from here on, no idle suspend until the rip is done.
+[[ -n ${MEDIAGRAB_INHIBITED-} ]] || MEDIAGRAB_INHIBITED=1 exec systemd-inhibit \
+  --what=sleep:idle --who=mediagrabber --why="Ripping a DVD" "$BASH" "${BASH_SOURCE[0]}" "${args[@]}"
 
 stamp=$(date +%Y%m%d-%H%M%S)
 work=$state/staging/$stamp

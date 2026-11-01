@@ -1,5 +1,6 @@
 # mediagrab (the dispatcher udev runs), cdrip, cdrip-ship, dvdrip, datarip and
-# mediagrab-popup (the sticky desktop notification), each a
+# mediagrab-popup (the sticky desktop notification), and mediagrab-ask
+# (a notification with buttons, in C on sd-bus — see ask.c),, each a
 # wrapper with the runtime tools pinned on PATH so the unit does not depend
 # on the system profile. fleet-notify is the exception: it is host config,
 # found at run time and skipped if absent.
@@ -9,7 +10,7 @@
 # but drags in ~140 MB of codecs this never uses. The override is not in
 # cache.nixos.org, so it builds once per nixpkgs bump (a few minutes).
 # libdvdread links libdvdcss in nixpkgs, which is what decrypts CSS.
-{ lib, stdenvNoCC, makeWrapper, bash, cyanrip, flac, rsync, openssh,
+{ lib, stdenv, makeWrapper, pkg-config, bash, cyanrip, flac, rsync, openssh,
   coreutils, findutils, gnugrep, gnused, gawk, util-linux, systemd, lsdvd,
   ffmpeg-headless, libnotify, gnutar, udisks }:
 
@@ -20,12 +21,17 @@ let
     util-linux systemd lsdvd ffmpeg libnotify gnutar udisks
   ];
 in
-stdenvNoCC.mkDerivation {
+stdenv.mkDerivation {
   pname = "mediagrabber";
-  version = "0.5.2";
+  version = "0.6.0";
   src = ./.;
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeWrapper pkg-config ];
+  buildInputs = [ systemd ];
+  buildPhase = ''
+    $CC -O2 -Wall -o mediagrab-ask ask.c $(pkg-config --cflags --libs libsystemd)
+  '';
   installPhase = ''
+    install -Dm755 mediagrab-ask $out/bin/mediagrab-ask
     for s in mediagrab cdrip dvdrip datarip popup; do
       install -Dm755 $s.sh $out/libexec/$s
     done

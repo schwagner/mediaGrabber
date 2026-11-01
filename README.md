@@ -37,13 +37,19 @@ that: `THE_MATRIX_WS` → `The Matrix`, `FRIENDS_S1_D2` → Friends season 1.
 Jellyfin then finds the film or show on TMDb by name; fix a wrong match
 with *Identify*. TV discs must go in in order.
 
-When guessing would be wrong, nothing is ripped: the disc stays in the
-drive, and the notification lists the titles and the command to run:
+When guessing would be wrong, it asks instead: a popup lists the titles
+and has buttons for the answers (*Title 3*, *Season 2*, *Film: title 1*,
+*Eject*), plus a reply field where a name or season has to be typed.
+Answering starts the rip. That happens when:
 
 - label is generic (`DVD_VIDEO`, `DISC1`)
 - TV-shaped disc with no season in the label
 - several titles of identical length (copy-protection decoys)
 - nothing longer than 40 minutes
+
+Dismiss the popup (or take the disc out, which withdraws it) and nothing
+is ripped or ejected; the `fleet-notify` message has the commands to run
+by hand:
 
 ```sh
 dvdrip /dev/sr0 movie "Cars (2006)" 3       # title 3 as the film
