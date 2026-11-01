@@ -19,16 +19,22 @@
 #
 # MusicBrainz outcomes, and why each is handled the way it is:
 #   - one release    -> rip and ship.
-#   - several        -> cyanrip refuses without -R. Retry with -R 1 and ship,
-#                       but say so in the notification: the tracklist is the
-#                       same disc, only country/label/date may be off.
-#   - none           -> rip untagged (-N) and keep it LOCAL in unmatched/.
-#                       Untagged "Unknown Album" folders in Jellyfin are worse
-#                       than a short delay; tag it with Picard and run
+#   - several        -> cyanrip refuses without -R. A popup offers the
+#                       releases as buttons (mediagrab-ask); unanswered in
+#                       5 min, -R 1 — the tracklist is the same disc, only
+#                       country/label/date may be off — and the
+#                       notification says so.
+#   - none           -> a popup asks for "Artist - Album (Year)": typed, the
+#                       rip is tagged with that and shipped (no track titles).
+#                       "Rip untagged", or no answer in 5 min: rip untagged
+#                       (-N) and keep it LOCAL in unmatched/. Untagged
+#                       "Unknown Album" folders in Jellyfin are worse than a
+#                       short delay; tag it with Picard and run
 #                       `cdrip-ship <dir>` to send it on.
 #
-# A failed rip never ejects, so the disc stays in the drive to be cleaned
-# and retried with `systemctl start mediagrab@sr0`.
+# A failed rip never ejects: the disc stays in the drive, and the popup
+# offers Retry and Eject (or: `systemctl start mediagrab@sr0`). Every popup
+# also has Eject, and goes away by itself if the disc is taken out.
 # ============================================================
 set -euo pipefail
 
@@ -119,25 +125,75 @@ rip() {
   # PNG, and cyanrip embeds the cover in every track. The 1200px JPEG
   # thumbnail is plenty. -L/-M left at cyanrip's defaults: they carry the
   # "CD<n>" suffix that keeps a multi-disc set's logs from colliding.
-  cyanrip -d "$dev" -s "$offset" -o flac -m 1200 -D rip "$@" 2>&1 | tee -a cyanrip.out
+  # The sleep block covers the rip only, not a question waiting on the desktop.
+  local inhibit=()
+  [[ -n ${MEDIAGRAB_INHIBITED-} ]] ||
+    inhibit=(systemd-inhibit --what=sleep:idle --who=mediagrabber --why="Ripping a CD")
+  "${inhibit[@]}" cyanrip -d "$dev" -s "$offset" -o flac -m 1200 -D rip "$@" 2>&1 | tee -a cyanrip.out
   return "${PIPESTATUS[0]}"
+}
+
+ask() {  # a popup with buttons while the disc is in; prints the answer
+  command -v mediagrab-ask >/dev/null || return 1
+  mediagrab-ask --while "udevadm info --query=property --name=$(printf %q "$dev") | grep -qx ID_CDROM_MEDIA=1" "$@"
+}
+
+failed() {  # failed <message> — the disc stays in; offer Retry / Eject
+  local a
+  echo "$1"
+  command -v fleet-notify >/dev/null && fleet-notify "cdrip: $1" || true
+  notified=1
+  if command -v mediagrab-ask >/dev/null; then
+    a=$(ask --title "CD rip FAILED" "$1" retry=Retry eject=Eject) || true
+  else
+    command -v mediagrab-popup >/dev/null && mediagrab-popup fail "$1" || true
+  fi
+  case ${a-} in
+    retry) cd /; rm -rf "$work"; echo "answered: retry"; exec "$BASH" "${BASH_SOURCE[0]}" "$dev" ;;
+    eject) eject "$dev" || true ;;
+  esac
+  exit 1
+}
+
+untagged() {  # rip -N into unmatched/, to be tagged by hand and cdrip-ship'd
+  rip -N || failed "rip FAILED on $dev — see $work/cyanrip.out"
+  mkdir -p "$state/unmatched"
+  mv "$work" "$state/unmatched/$stamp"
+  eject "$dev" || true
+  notify note "disc not in MusicBrainz; ripped untagged to $state/unmatched/$stamp. Tag it, then: cdrip-ship $state/unmatched/$stamp/rip"
+  exit 0
 }
 
 note=""
 if ! rip; then
   if grep -q 'Multiple releases found' cyanrip.out; then
-    note=" (several MusicBrainz releases; took the first)"
-    rip -R 1 || { notify fail "rip FAILED on $dev — see $work/cyanrip.out"; exit 1; }
-  elif grep -q 'Unable to find release info' cyanrip.out; then
-    rip -N || { notify fail "rip FAILED on $dev — see $work/cyanrip.out"; exit 1; }
-    mkdir -p "$state/unmatched"
-    mv "$work" "$state/unmatched/$stamp"
-    eject "$dev" || true
-    notify note "disc not in MusicBrainz; ripped untagged to $state/unmatched/$stamp. Tag it, then: cdrip-ship $state/unmatched/$stamp/rip"
-    exit 0
+    # "    2 (ID: 5f1c…): The Sign (US) (1993-…)" -> "2=The Sign (US) (1993-…)"
+    mapfile -t rels < <(sed -nE 's/^ +([0-9]+) \(ID: [^)]*\): (.*)$/\1=\2/p' cyanrip.out)
+    a=$(ask --timeout 300 --title "CD: which MusicBrainz release?" \
+          "${#rels[@]} releases match this disc; same tracks, they differ in country, label or date. Unanswered, the first is taken in 5 min." \
+          "${rels[@]:0:4}" eject=Eject) || a=""
+    [[ $a == eject ]] && { eject "$dev" || true; echo "answered: eject"; exit 0; }
+    if [[ $a =~ ^[0-9]+$ ]]; then note=" (release $a of ${#rels[@]} on MusicBrainz, as chosen)"
+    else a=1 note=" (${#rels[@]} MusicBrainz releases; took the first)"; fi
+    rip -R "$a" || failed "rip FAILED on $dev — see $work/cyanrip.out"
+  elif grep -qE 'Unable to find release info|matching stub' cyanrip.out; then
+    a=$(ask --timeout 300 --title "CD not in MusicBrainz" --reply "Artist - Album (Year)" \
+          "Type \"Artist - Album (Year)\" to tag it and file it in the library, or rip it untagged to tag later with Picard. Unanswered: untagged, in 5 min." \
+          untagged="Rip untagged" eject=Eject) || untagged
+    [[ $a == eject ]] && { eject "$dev" || true; echo "answered: eject"; exit 0; }
+    # "Artist - Album (Year)", the year optional
+    [[ $a =~ ^reply\ (.+[^ ])\ +-\ +(.+[^ ])$ ]] || untagged
+    artist=${BASH_REMATCH[1]} album=${BASH_REMATCH[2]} year=""
+    if [[ $album =~ ^(.+[^ ])\ *\(([0-9]{4})\)$ ]]; then album=${BASH_REMATCH[1]} year=${BASH_REMATCH[2]}; fi
+    rip -N || failed "rip FAILED on $dev — see $work/cyanrip.out"
+    for f in rip/*.flac; do
+      metaflac --remove-tag=ALBUM --remove-tag=ALBUMARTIST --remove-tag=ARTIST --remove-tag=DATE \
+        --set-tag="ALBUM=$album" --set-tag="ALBUMARTIST=$artist" --set-tag="ARTIST=$artist" \
+        ${year:+--set-tag=DATE=$year} "$f"
+    done
+    note=" (not in MusicBrainz; tagged as typed, track titles missing)"
   else
-    notify fail "rip FAILED on $dev — see $work/cyanrip.out"
-    exit 1
+    failed "rip FAILED on $dev — see $work/cyanrip.out"
   fi
 fi
 

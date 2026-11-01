@@ -29,7 +29,7 @@
 # event for the same disc is harmless: starting a running unit is a no-op.
 #
 # SLEEP. The rip runs under systemd-inhibit --what=sleep:idle, which stops
-# idle suspend mid-rip. mediagrab/dvdrip take it around the rip itself,
+# idle suspend mid-rip. the scripts take it around the rip itself,
 # not the whole unit, so a DVD waiting on a popup's buttons does not keep
 # the machine awake. logind's default only lets an *active session* take
 # a sleep block, and a system unit is not in one — hence the polkit

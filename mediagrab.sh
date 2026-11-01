@@ -42,7 +42,7 @@ crashed() {
 
 trap crashed EXIT
 
-# No idle suspend mid-rip. dvdrip takes this itself once it knows what to
+# No idle suspend mid-rip. cdrip and dvdrip take this themselves around the
 # rip, so a disc waiting on a question does not keep the machine awake.
 inhibit=(systemd-inhibit --what=sleep:idle --who=mediagrabber --why="Ripping a disc")
 
@@ -52,7 +52,7 @@ has() { grep -q "^$1" <<<"$props"; }
 if has 'ID_CDROM_MEDIA_STATE=blank'; then
   notify note "blank disc in $dev — left alone"
 elif has 'ID_CDROM_MEDIA_TRACK_COUNT_AUDIO='; then
-  exec "${inhibit[@]}" cdrip "$dev"
+  exec cdrip "$dev"
 elif ! has 'ID_CDROM_MEDIA_BD' && has 'ID_CDROM_MEDIA_DVD' && lsdvd "$dev" >/dev/null 2>&1; then
   if [[ ${MEDIAGRAB_DVD:-1} == 1 ]]; then
     exec dvdrip "$dev"

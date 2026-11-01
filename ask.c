@@ -2,12 +2,13 @@
  * ask.c — mediagrab-ask: a desktop notification that asks a question
  *
  * Usage: mediagrab-ask [--title T] [--reply PLACEHOLDER] [--while CMD]
- *                      MESSAGE KEY=LABEL...
+ *                      [--timeout SECS] MESSAGE KEY=LABEL...
  *
  * One button per KEY=LABEL; prints the KEY of the button pressed. --reply
  * adds a text field (the KDE inline-reply extension: noctalia, KDE, ...),
  * and what is typed there is printed as "reply TEXT". --while CMD keeps the
- * question up only while `sh -c CMD` succeeds, checked every 5 s. Exits 1,
+ * question up only while `sh -c CMD` succeeds, checked every 5 s, and
+ * --timeout withdraws it after SECS. Exits 1,
  * printing nothing, when the question is dismissed, withdrawn, or cannot be
  * asked (no session bus, no notification server).
  *
@@ -22,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <systemd/sd-bus.h>
+#include <time.h>
 
 #define NF_NAME "org.freedesktop.Notifications"
 #define NF_PATH "/org/freedesktop/Notifications"
@@ -51,17 +53,20 @@ static int on_signal(sd_bus_message *m, void *u, sd_bus_error *e) {
 
 int main(int argc, char **argv) {
   const char *title = "Disc needs a decision", *reply = NULL, *cond = NULL;
+  long timeout = 0;
   static struct option opts[] = {
     {"title", required_argument, 0, 't'}, {"reply", required_argument, 0, 'r'},
-    {"while", required_argument, 0, 'w'}, {0, 0, 0, 0}};
-  for (int c; (c = getopt_long(argc, argv, "+t:r:w:", opts, NULL)) != -1;) {
+    {"while", required_argument, 0, 'w'}, {"timeout", required_argument, 0, 'T'},
+    {0, 0, 0, 0}};
+  for (int c; (c = getopt_long(argc, argv, "+t:r:w:T:", opts, NULL)) != -1;) {
     if (c == 't') title = optarg;
     else if (c == 'r') reply = optarg;
     else if (c == 'w') cond = optarg;
+    else if (c == 'T') timeout = strtol(optarg, NULL, 10);
     else return 2;
   }
   if (optind >= argc) {
-    fprintf(stderr, "usage: mediagrab-ask [--title T] [--reply P] [--while CMD] MESSAGE KEY=LABEL...\n");
+    fprintf(stderr, "usage: mediagrab-ask [--title T] [--reply P] [--while CMD] [--timeout S] MESSAGE KEY=LABEL...\n");
     return 2;
   }
   const char *body = argv[optind++];
@@ -95,7 +100,9 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  time_t until = timeout > 0 ? time(NULL) + timeout : 0;
   while (!done) {
+    if (until && time(NULL) >= until) break;
     int n = sd_bus_process(bus, NULL);
     if (n < 0) return 1;            /* bus gone (logged out) */
     if (n > 0) continue;

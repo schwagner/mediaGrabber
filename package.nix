@@ -23,7 +23,7 @@ let
 in
 stdenv.mkDerivation {
   pname = "mediagrabber";
-  version = "0.6.0";
+  version = "0.7.0";
   src = ./.;
   nativeBuildInputs = [ makeWrapper pkg-config ];
   buildInputs = [ systemd ];

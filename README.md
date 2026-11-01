@@ -20,9 +20,15 @@ Everything is shipped by rsync over SSH and the disc is ejected.
 
 ## CDs
 
-- Several MusicBrainz releases for one disc: takes the first, and says so.
-- Not in MusicBrainz: ripped untagged into `/var/lib/mediagrabber/cd/unmatched/`
-  instead of the library. Tag it with Picard, then `cdrip-ship <dir>`.
+- Several MusicBrainz releases for one disc: a popup offers them as
+  buttons (country, date). Unanswered in 5 minutes, it takes the first and
+  says so.
+- Not in MusicBrainz: a popup asks for `Artist - Album (Year)`. Typed, the
+  rip is tagged with that and filed in the library (track titles stay
+  "Track 01"…). *Rip untagged*, or no answer in 5 minutes: ripped untagged
+  into `/var/lib/mediagrabber/cd/unmatched/` instead of the library. Tag it
+  with Picard, then `cdrip-ship <dir>`.
+- Rip failed: the disc stays in, and the popup offers *Retry* and *Eject*.
 - Set the drive's read offset once (`cyanrip -f -d /dev/sr0`), or every
   track reports an AccurateRip mismatch.
 
@@ -109,5 +115,13 @@ worked: a critical desktop popup for `user` that stays up until dismissed
 (skipped if they are not logged in), and a `fleet-notify` message if that
 is on PATH. A crash mid-rip still pops one.
 
+Questions (which release, what to call a disc, retry a failed rip) come
+as popups with buttons, and a reply field where something must be typed.
+They are asked by `mediagrab-ask`, a small sd-bus program: some
+notification servers, noctalia among them, only report a button press to
+the connection that created the notification. A question goes away by
+itself if the disc is taken out.
+
 Tests (no drive needed): `bash tests/dvdrip-test.sh` for the DVD
-decisions, `bash tests/datarip-test.sh` for archiving.
+decisions, `nix shell nixpkgs#flac -c bash tests/cdrip-test.sh` for the
+CD ones, `bash tests/datarip-test.sh` for archiving.
