@@ -44,6 +44,7 @@ let
   state = "/var/lib/mediagrabber";
 
   env = {
+    MEDIAGRAB_STATUS = "${state}/status";
     CDRIP_DEST = cfg.cd.dest;
     CDRIP_OFFSET = toString cfg.cd.offset;
     CDRIP_STATE = "${state}/cd";

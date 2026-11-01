@@ -36,9 +36,11 @@
 # A failure on the SSH/zstd side keeps nothing.
 # ============================================================
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/status.sh"
 
 dev=${1:?usage: datarip <device>}
 [[ $dev == /dev/* ]] || dev=/dev/$dev
+status_run data
 
 state=${DATARIP_STATE:-/var/lib/mediagrabber/data}
 dest=${DATARIP_DEST:?DATARIP_DEST (host:/path) is not set}
@@ -50,6 +52,7 @@ notify() {  # notify <ok|fail|note> <message> — once per run, as it ends
   echo "$*"
   command -v fleet-notify >/dev/null && fleet-notify "datarip: $*" || true
   command -v mediagrab-popup >/dev/null && mediagrab-popup "$level" "$*" || true
+  status_end "$level" "$*"
   notified=1
 }
 
@@ -58,6 +61,8 @@ crashed() {
   local rc=$?
   (( rc == 0 )) || [[ -n ${notified-} ]] ||
     notify fail "datarip stopped unexpectedly (exit $rc) on ${dev:-the drive} — see journalctl -u 'mediagrab@*'"
+  # Ejected from a popup, or left in undecided: the run is over all the same.
+  (( rc != 0 )) || [[ -n ${notified-} ]] || status_end note "nothing ripped"
 }
 trap crashed EXIT
 
@@ -73,6 +78,7 @@ name="$(safe "${label:-untitled}")_$(safe "${id:-$(date +%Y-%m-%d-%H%M%S)}")"
 name=${name#_}
 final="$path/$name.tar.zst"
 shown="\"${label:-untitled}\""
+status disc="${label:-untitled}"
 
 if remote "test -e $(q "$final")"; then
   eject "$dev" || true
@@ -108,6 +114,16 @@ size=$( (du -sb "$mnt" 2>/dev/null || true) | cut -f1)
 part="$final.part"
 
 echo "archiving $mnt ($(numfmt --to=iec "$size")) to $host:$final"
+status phase=ripping step="$(numfmt --to=iec "${size:-0}") to $host" progress=
+
+data_tick() {  # ticker: bytes tar has read, against du's total
+  local pid r
+  pid=$(pgrep -x -P "$$" tar | head -n1) || return 0
+  r=$(sed -n 's/^rchar: //p' "/proc/$pid/io" 2>/dev/null) || return 0
+  [[ $r =~ ^[0-9]+$ && ${size:-0} -gt 0 ]] || return 0
+  status step="$(numfmt --to=iec "$r") of $(numfmt --to=iec "$size")" progress="$(fraction "$r" "$size")"
+}
+tick_start data_tick
 # -vv with --index-file: the ls -l style listing goes to the file, not the
 # stream. --transform puts everything under $name/ (safe() leaves no
 # characters sed would read specially). tar's stderr is only its complaints.
@@ -117,6 +133,8 @@ tar -C "$mnt" -cvv --show-transformed-names --index-file="$work/index.txt" --tra
   remote "mkdir -p $(q "$path") && nice zstd -q -T0 -$level > $(q "$part")"
 rc=("${PIPESTATUS[@]}")
 set -e
+tick_stop
+status phase=shipping step="finishing on $host" progress=
 cat "$work/errors.txt" >&2
 if (( rc[1] != 0 )); then
   remote "rm -f $(q "$part")" || true

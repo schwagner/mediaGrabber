@@ -1,0 +1,68 @@
+{
+  "settings": {
+    "status_dir": {
+      "label": "Status directory",
+      "description": "Where mediaGrabber writes one <drive>.json per drive (MEDIAGRAB_STATUS)."
+    },
+    "recent_hours": {
+      "label": "Keep outcome highlighted (hours)",
+      "description": "How long a finished or failed rip keeps the bar glyph coloured."
+    },
+    "hide_when_idle": {
+      "label": "Hide when idle",
+      "description": "Hide the bar widget unless a disc is ripping or a recent outcome is waiting to be seen."
+    }
+  },
+  "phase": {
+    "detecting": "Looking at the disc",
+    "waiting": "Waiting for your answer",
+    "ripping": "Ripping",
+    "shipping": "Copying to the library",
+    "done": "Done",
+    "failed": "Failed",
+    "note": "Finished — see note",
+    "interrupted": "Interrupted"
+  },
+  "kind": {
+    "cd": "Audio CD",
+    "dvd": "Video DVD",
+    "data": "Data disc",
+    "unknown": "Disc"
+  },
+  "tooltip": {
+    "state": "State",
+    "disc": "Disc",
+    "step": "Now",
+    "click": "Click",
+    "click-value": "details"
+  },
+  "panel": {
+    "title": "mediaGrabber",
+    "live": "{n} running",
+    "idle": "Nothing ripping",
+    "refresh": "Re-read",
+    "empty": "No rips yet",
+    "empty-detail": "No rip has written a status file yet. Insert a disc; its progress will show here. (Reading {dir})"
+  },
+  "card": {
+    "log": "Journal in a terminal",
+    "eject": "Eject",
+    "eject-busy": "Busy — the popup has Eject while a question is open",
+    "waiting": "A popup on the desktop is asking how to rip this disc.",
+    "interrupted": "Stopped before it finished (unit stopped, crash, or the machine went down). Reinsert the disc to start again.",
+    "interrupted-at": "Stopped before it finished, at: {step}. Reinsert the disc to start again.",
+    "left": "about {value} left",
+    "running-for": "Running for {value}",
+    "ended": "{value} ago"
+  },
+  "time": {
+    "seconds": "{n} s",
+    "minutes": "{n} min",
+    "hours": "{n} h",
+    "days": "{n} days"
+  },
+  "toast": {
+    "title": "mediaGrabber",
+    "eject-failed": "Could not eject the drive"
+  }
+}

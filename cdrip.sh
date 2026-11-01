@@ -37,6 +37,7 @@
 # also has Eject, and goes away by itself if the disc is taken out.
 # ============================================================
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/status.sh"
 
 state=${CDRIP_STATE:-/var/lib/cdrip}
 dest=${CDRIP_DEST:?CDRIP_DEST (host:/path) is not set}
@@ -47,6 +48,7 @@ notify() {  # notify <ok|fail|note> <message> — once per run, as it ends
   echo "$*"
   command -v fleet-notify >/dev/null && fleet-notify "cdrip: $*" || true
   command -v mediagrab-popup >/dev/null && mediagrab-popup "$level" "$*" || true
+  status_end "$level" "$*"
   notified=1
 }
 
@@ -55,6 +57,8 @@ crashed() {
   local rc=$?
   (( rc == 0 )) || [[ -n ${notified-} ]] ||
     notify fail "cdrip stopped unexpectedly (exit $rc) on ${dev:-the drive} — see journalctl -u 'mediagrab@*'"
+  # Ejected from a popup, or left in undecided: the run is over all the same.
+  (( rc != 0 )) || [[ -n ${notified-} ]] || status_end note "nothing ripped"
 }
 
 tag() {  # tag <flac> <name>... — first non-empty of the named tags
@@ -114,6 +118,9 @@ trap crashed EXIT
 
 dev=${1:?usage: cdrip <device>}
 [[ $dev == /dev/* ]] || dev=/dev/$dev
+tracks=$(udevadm info --query=property --name="$dev" | sed -n 's/^ID_CDROM_MEDIA_TRACK_COUNT_AUDIO=//p' | head -n1 || true)
+status_run cd
+status disc="Audio CD${tracks:+, $tracks tracks}"
 
 stamp=$(date +%Y%m%d-%H%M%S)
 work=$state/staging/$stamp
@@ -129,12 +136,32 @@ rip() {
   local inhibit=()
   [[ -n ${MEDIAGRAB_INHIBITED-} ]] ||
     inhibit=(systemd-inhibit --what=sleep:idle --who=mediagrabber --why="Ripping a CD")
+  status phase=ripping step="reading the disc" progress=
+  tick_start cd_tick
   "${inhibit[@]}" cyanrip -d "$dev" -s "$offset" -o flac -m 1200 -D rip "$@" 2>&1 | tee -a cyanrip.out
-  return "${PIPESTATUS[0]}"
+  local rc=${PIPESTATUS[0]}
+  tick_stop
+  return "$rc"
+}
+
+cd_tick() {  # ticker: album, "track 3 of 12" and a fraction, from cyanrip's output
+  local out n pct album artist args=()
+  out=$(tr '\r' '\n' < cyanrip.out)
+  read -r n pct < <(sed -nE 's/.*track ([0-9]+), progress - ([0-9.]+)%.*/\1 \2/p' <<<"$out" | tail -n1) || true
+  album=$(sed -nE 's/^Album: +//p' <<<"$out" | head -n1)
+  artist=$(sed -nE 's/^Album artist: +//p' <<<"$out" | head -n1)
+  [[ -n $album ]] && args+=(disc="${artist:+$artist — }$album")
+  if [[ -n ${n-} ]]; then
+    args+=(step="track $n${tracks:+ of $tracks}")
+    [[ -n $tracks ]] && args+=(progress="$(awk -v n="$n" -v p="$pct" -v t="$tracks" \
+      'BEGIN { f = (n - 1 + p / 100) / t; if (f > 1) f = 1; printf "%.4f", f }')")
+  fi
+  (( ${#args[@]} )) && status "${args[@]}"
 }
 
 ask() {  # a popup with buttons while the disc is in; prints the answer
   command -v mediagrab-ask >/dev/null || return 1
+  [[ -n ${failed_run-} ]] || status_asking "$@"
   mediagrab-ask --while "udevadm info --query=property --name=$(printf %q "$dev") | grep -qx ID_CDROM_MEDIA=1" "$@"
 }
 
@@ -142,7 +169,8 @@ failed() {  # failed <message> — the disc stays in; offer Retry / Eject
   local a
   echo "$1"
   command -v fleet-notify >/dev/null && fleet-notify "cdrip: $1" || true
-  notified=1
+  status_end fail "$1"
+  notified=1 failed_run=1
   if command -v mediagrab-ask >/dev/null; then
     a=$(ask --title "CD rip FAILED" "$1" retry=Retry eject=Eject) || true
   else
@@ -202,6 +230,7 @@ fi
 accurip=$(grep -o 'Tracks ripped accurately: [0-9]*/[0-9]*' cyanrip.out | tail -n1 || true)
 accurip=${accurip:+ — AccurateRip ${accurip#Tracks ripped accurately: }}
 
+status phase=shipping step="to $dest" progress=
 if target=$(ship "$work/rip"); then
   eject "$dev" || true
   cd /

@@ -1,0 +1,73 @@
+# mediaGrabber — what the disc drive is doing, in the Noctalia bar.
+#
+# Reads the status files status.sh writes, one per drive, under
+# /var/lib/mediagrabber/status/<drive>.json. Nothing is asked of the rip and
+# nothing runs as root: the files are world-readable and the plugin only
+# reads them (plus `eject` and `journalctl` when a button asks for them).
+#
+# SHIPPED BY THE PACKAGE, at share/noctalia/plugins/mediagrab, so the plugin
+# on a desktop always matches the scripts writing for it — the JSON is the
+# contract between them, documented at the top of status.sh.
+#
+# A "ripping" file whose pid is gone, or that was written in another boot,
+# is shown as interrupted: the unit was stopped or the machine went down
+# mid-rip, and the run never got to write its outcome.
+#
+# plugin_api 32: noctalia.listDir (drives are found, not configured).
+
+id = "andrew/mediagrab"
+name = "mediaGrabber"
+version = "0.1.0"
+plugin_api = 32
+author = "Andrew Wagner"
+license = "MIT"
+dependencies = ["eject", "journalctl"]
+tags = ["bar", "panel", "service", "media"]
+icon = "disc"
+description = "Disc rip status from mediaGrabber: what is in the drive, how far along, and how the last rip ended."
+
+# ── Plugin-level settings ────────────────────────────────────────────────────
+
+[[setting]]
+key = "status_dir"
+type = "string"
+label_key = "settings.status_dir.label"
+description_key = "settings.status_dir.description"
+default = "/var/lib/mediagrabber/status"
+
+# How long a finished run keeps the bar glyph coloured (green tick, red
+# triangle). After that the glyph goes back to plain; the panel still shows it.
+[[setting]]
+key = "recent_hours"
+type = "int"
+label_key = "settings.recent_hours.label"
+description_key = "settings.recent_hours.description"
+default = 12
+min = 1
+max = 168
+
+# ── Entries ──────────────────────────────────────────────────────────────────
+
+[[service]]
+id = "reader"
+entry = "service.luau"
+
+[[widget]]
+id = "bar"
+entry = "bar.luau"
+
+  [[widget.setting]]
+  key = "hide_when_idle"
+  type = "bool"
+  label_key = "settings.hide_when_idle.label"
+  description_key = "settings.hide_when_idle.description"
+  default = false
+
+[[panel]]
+id = "panel"
+entry = "panel.luau"
+width = 400
+height = 420
+placement = "attached"
+position = "auto"
+open_near_click = true

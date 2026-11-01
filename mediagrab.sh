@@ -24,12 +24,15 @@ set -euo pipefail
 
 dev=${1:?usage: mediagrab <device>}
 [[ $dev == /dev/* ]] || dev=/dev/$dev
+source "$(dirname "${BASH_SOURCE[0]}")/status.sh"
+status_new
 
 notify() {  # notify <ok|fail|note> <message> — once per run, as it ends
   local level=$1; shift
   echo "$*"
   command -v fleet-notify >/dev/null && fleet-notify "mediagrab: $*" || true
   command -v mediagrab-popup >/dev/null && mediagrab-popup "$level" "$*" || true
+  status_end "$level" "$*"
   notified=1
 }
 

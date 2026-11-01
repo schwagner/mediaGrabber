@@ -18,6 +18,15 @@ works out what the disc is:
 
 Everything is shipped by rsync over SSH and the disc is ejected.
 
+## Watching a rip
+
+Every run keeps `/var/lib/mediagrabber/status/<drive>.json` up to date:
+what the disc is, the phase, the step, and a measured progress fraction
+(see `status.sh`). The Noctalia plugin in `noctalia/` shows it in the bar:
+a glyph with the percentage while ripping, and a panel on click with a
+progress bar, time left, the outcome, the journal and Eject. The package
+ships it at `share/noctalia/plugins/mediagrab`.
+
 ## CDs
 
 - Several MusicBrainz releases for one disc: a popup offers them as

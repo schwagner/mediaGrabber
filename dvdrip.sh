@@ -41,6 +41,7 @@
 # carries the title list and the commands to run by hand.
 # ============================================================
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/status.sh"
 
 args=("$@")
 dev=${1:?usage: dvdrip <device> [movie "<Name (Year)>" [title] | show "<Series>" <season> [first ep]]}
@@ -50,12 +51,14 @@ mode=${2:-auto}
 state=${DVDRIP_STATE:-/var/lib/mediagrabber/dvd}
 movies=${DVDRIP_MOVIES:?DVDRIP_MOVIES (host:/path) is not set}
 shows=${DVDRIP_SHOWS:?DVDRIP_SHOWS (host:/path) is not set}
+status_run dvd
 
 notify() {  # notify <ok|fail|note> <message> — once per run, as it ends
   local level=$1; shift
   echo "$*"
   command -v fleet-notify >/dev/null && fleet-notify "dvdrip: $*" || true
   command -v mediagrab-popup >/dev/null && mediagrab-popup "$level" "$*" || true
+  status_end "$level" "$*"
   notified=1
 }
 
@@ -64,6 +67,8 @@ crashed() {
   local rc=$?
   (( rc == 0 )) || [[ -n ${notified-} ]] ||
     notify fail "dvdrip stopped unexpectedly (exit $rc) on ${dev:-the drive} — see journalctl -u 'mediagrab@*'"
+  # Ejected from a popup, or left in undecided: the run is over all the same.
+  (( rc != 0 )) || [[ -n ${notified-} ]] || status_end note "nothing ripped"
 }
 trap crashed EXIT
 
@@ -75,6 +80,7 @@ hms() { printf '%d:%02d:%02d' $(($1/3600)) $(($1%3600/60)) $(($1%60)); }
 
 info=$(lsdvd "$dev" 2>/dev/null) || { notify fail "lsdvd cannot read $dev"; exit 1; }
 label=$(sed -n 's/^Disc Title: *//p' <<<"$info" | head -n1)
+status disc="${label:-DVD}"
 
 # "Title: 01, Length: 01:52:33.200 Chapters: 28, ..." -> "1 6753"
 declare -A len=()
@@ -124,10 +130,16 @@ decide() {  # decide <reason> — ask on the desktop; unanswered, leave the disc
 }
 ask() {  # the question as a popup with buttons; prints the answer
   command -v mediagrab-ask >/dev/null || return 1
+  status_asking "$@"
   mediagrab-ask --while "udevadm info --query=property --name=$(printf %q "$dev") | grep -qx ID_CDROM_MEDIA=1" "$@"
 }
 leave() {  # leave [eject] — no rip; eject only if asked to
-  [[ ${1-} == eject ]] && { eject "$dev" || true; }
+  if [[ ${1-} == eject ]]; then
+    eject "$dev" || true
+    status_end note "\"$label\" ejected — nothing ripped"
+  else
+    status_end note "\"$label\" left in the drive, undecided — nothing ripped"
+  fi
   exit 0
 }
 again() {  # again <dvdrip args after the device> — the answer, as a fresh run
@@ -205,6 +217,7 @@ case $mode in
   *) echo "unknown mode $mode" >&2; exit 2 ;;
 esac
 name=$(clean "$name")
+status disc="$name" phase=ripping step= progress=
 
 # Decided: from here on, no idle suspend until the rip is done.
 [[ -n ${MEDIAGRAB_INHIBITED-} ]] || MEDIAGRAB_INHIBITED=1 exec systemd-inhibit \
@@ -219,18 +232,42 @@ printf '%s\n' "$info" > lsdvd.txt
 remux() {  # remux <title> <out.mkv>
   # Video, audio, subtitles only: an MKV muxer error on some stray stream
   # type should not cost the film. -map_chapters comes along by default.
-  ffmpeg -nostdin -hide_banner -loglevel warning -stats \
+  # -progress is for the ticker: out_time_us against the title's length.
+  local rc=0
+  prog=$work/$2.progress
+  tick_start dvd_tick
+  ffmpeg -nostdin -hide_banner -loglevel warning -stats -progress "$prog" \
     -f dvdvideo -title "$1" -i "$dev" \
     -map 0:v:0 -map '0:a?' -map '0:s?' -c copy \
-    -f matroska "$2.part" 2>>ffmpeg.out
+    -f matroska "$2.part" 2>>ffmpeg.out || rc=$?
+  tick_stop
+  rm -f "$prog"
+  (( rc == 0 )) || return "$rc"
   mv "$2.part" "$2"
+  done_s=$((done_s + ${len[$1]:-0})) ep_i=$((ep_i + 1))
+}
+
+dvd_tick() {  # ticker: time remuxed so far, over the whole rip
+  local us s
+  us=$(sed -n 's/^out_time_us=//p' "$prog" 2>/dev/null | tail -n1)
+  [[ $us =~ ^[0-9]+$ ]] || return 0
+  s=$((done_s + us / 1000000))
+  if (( ep_n > 1 )); then
+    status step="episode $ep_i of $ep_n · $(hms "$s") of $(hms "$total_s")" progress="$(fraction "$s" "$total_s")"
+  else
+    status step="$(hms "$s") of $(hms "$total_s")" progress="$(fraction "$s" "$total_s")"
+  fi
 }
 
 fail() { notify fail "rip FAILED for \"$label\" — see $work/ffmpeg.out (CSS keys? scratched?)"; exit 1; }
 
+done_s=0 ep_i=1
 if [[ $kind == movie ]]; then
   out="$name.mkv"
+  ep_n=1 total_s=$longest_s
+  status step="title $longest_t, $(hms "$longest_s")"
   remux "$longest_t" "$out" || fail
+  status phase=shipping step="to $movies/$name/" progress=
   rsync -t --mkpath --chmod=F0644 --ignore-existing --partial "$out" "$movies/$name/" || {
     notify fail "ripped but could not ship $work/$out to $movies/$name/"; exit 1; }
   what="movie \"$name\" (title $longest_t, $(hms "$longest_s"))"
@@ -243,12 +280,16 @@ else
          sed -E 's/.*E0*//' | sort -n | tail -n1 || true)
   n=${5:-$(( ${last:-0} + 1 ))}
   first=$n
+  ep_n=${#eps[@]} total_s=0
+  for e in "${eps[@]}"; do total_s=$((total_s + ${e%% *})); done
+  status step="$ep_n episodes, $(hms "$total_s")"
   for e in "${eps[@]}"; do
     t=${e##* }
     out=$(printf '%s S%02dE%02d.mkv' "$name" "$season" "$n")
     remux "$t" "$out" || fail
     n=$((n + 1))
   done
+  status phase=shipping step="to $dest/" progress=
   rsync -t --mkpath --chmod=F0644 --ignore-existing --partial ./*.mkv "$dest/" || {
     notify fail "ripped but could not ship $work to $dest/"; exit 1; }
   what=$(printf '%s S%02dE%02d–E%02d (%d titles — check the order)' "$name" "$season" "$first" "$((n - 1))" "${#eps[@]}")

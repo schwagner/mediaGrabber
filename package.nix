@@ -12,18 +12,18 @@
 # libdvdread links libdvdcss in nixpkgs, which is what decrypts CSS.
 { lib, stdenv, makeWrapper, pkg-config, bash, cyanrip, flac, rsync, openssh,
   coreutils, findutils, gnugrep, gnused, gawk, util-linux, systemd, lsdvd,
-  ffmpeg-headless, libnotify, gnutar, udisks }:
+  ffmpeg-headless, libnotify, gnutar, udisks, procps }:
 
 let
   ffmpeg = ffmpeg-headless.override { withDvdnav = true; withDvdread = true; };
   path = lib.makeBinPath [
     bash cyanrip flac rsync openssh coreutils findutils gnugrep gnused gawk
-    util-linux systemd lsdvd ffmpeg libnotify gnutar udisks
+    util-linux systemd lsdvd ffmpeg libnotify gnutar udisks procps
   ];
 in
 stdenv.mkDerivation {
   pname = "mediagrabber";
-  version = "0.7.0";
+  version = "0.8.0";
   src = ./.;
   nativeBuildInputs = [ makeWrapper pkg-config ];
   buildInputs = [ systemd ];
@@ -36,6 +36,12 @@ stdenv.mkDerivation {
       install -Dm755 $s.sh $out/libexec/$s
     done
     patchShebangs $out/libexec
+    # Sourced, not run: each script finds it next to itself.
+    install -Dm644 status.sh $out/libexec/status.sh
+    # The desktop side of status.sh. nixos-config ships it from here, so
+    # the plugin is always the one that matches the scripts writing for it.
+    mkdir -p $out/share/noctalia/plugins
+    cp -r noctalia $out/share/noctalia/plugins/mediagrab
     # Every wrapper gets the same PATH, $out/bin first, so mediagrab can
     # exec cdrip/dvdrip/datarip by name.
     for s in mediagrab cdrip dvdrip datarip; do
